@@ -1,1 +1,3 @@
-# open-m711pro nao tem dependencias de runtime (Python stdlib puro).
+# O núcleo (m711pro.core: protocolo + device) é Python stdlib puro, sem deps.
+# A interface gráfica usa PySide6 (Qt). Sem ela, a GUI cai no tkinter (stdlib).
+PySide6>=6.5
