@@ -1,134 +1,387 @@
-"""Interface gráfica do open-m711pro (tkinter, sem dependências externas).
+"""Interface gráfica do open-m711pro em PySide6 (Qt).
 
-Estilo editor de imagem: paleta de swatches, seletor de cor HSV (colorchooser),
-cores recentes, preview com HEX/RGB e botão de desligar. Clicar aplica ao vivo.
+Inspirada no Logitech G HUB e no Piper (libratbag): barra lateral, roda de cores
+HSV desenhada com QPainter (anti-aliased), efeitos de iluminação e uma seção de
+Sensibilidade (DPI) já montada (protocolo a mapear).
+
+O núcleo (m711pro.core) continua stdlib puro; só esta GUI usa Qt.
 """
-import tkinter as tk
-from tkinter import ttk, colorchooser
+import math
+import colorsys
 
-from .core import device
-from . import colors
+from PySide6.QtCore import Qt, Signal, QRectF, QPointF
+from PySide6.QtGui import QPainter, QColor, QConicalGradient, QRadialGradient, QBrush, QPen
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout,
+    QLabel, QComboBox, QSlider, QPushButton, QFrame, QStackedWidget, QColorDialog,
+)
 
-BG = "#1e1e1e"
-FG = "#e0e0e0"
-MUTED = "#9a9a9a"
-CARD = "#2a2a2a"
-SWATCH = 24          # tamanho de cada swatch (px)
-RECENT_MAX = 12
+from .core import device, state
+
+ACCENT = "#19b8c8"
+
+QSS = f"""
+* {{ font-family: "Segoe UI", "Noto Sans", sans-serif; }}
+QMainWindow, QWidget#page {{ background: #12141a; }}
+QWidget#sidebar {{ background: #0b0d11; }}
+QLabel {{ color: #e8eaed; }}
+QLabel#muted {{ color: #8b9098; font-size: 11px; }}
+QLabel#title {{ font-size: 20px; font-weight: 700; }}
+QLabel#brand {{ font-size: 15px; font-weight: 700; color: #e8eaed; }}
+QPushButton#nav {{
+    color: #8b9098; background: transparent; border: none; text-align: left;
+    padding: 11px 18px; font-size: 13px; border-left: 3px solid transparent;
+}}
+QPushButton#nav:hover {{ background: #171a21; color: #e8eaed; }}
+QPushButton#nav:checked {{
+    color: {ACCENT}; background: #171a21; border-left: 3px solid {ACCENT};
+}}
+QComboBox {{
+    background: #20242e; color: #e8eaed; border: 1px solid #2a2e38;
+    border-radius: 6px; padding: 6px 10px; min-width: 180px;
+}}
+QComboBox QAbstractItemView {{
+    background: #20242e; color: #e8eaed; selection-background-color: {ACCENT};
+}}
+QPushButton#action {{
+    background: #20242e; color: #e8eaed; border: 1px solid #2a2e38;
+    border-radius: 6px; padding: 8px 14px;
+}}
+QPushButton#action:hover {{ background: #2a2f3a; }}
+QSlider::groove:horizontal {{ height: 6px; background: #20242e; border-radius: 3px; }}
+QSlider::handle:horizontal {{
+    background: {ACCENT}; width: 16px; margin: -6px 0; border-radius: 8px;
+}}
+QSlider::sub-page:horizontal {{ background: {ACCENT}; border-radius: 3px; }}
+QLabel#statusbar {{ background: #191c24; color: #8b9098; padding: 7px 12px; }}
+QFrame#chip {{ background: #171a21; border-radius: 6px; }}
+QFrame#chipActive {{ background: #20242e; border: 1px solid {ACCENT}; border-radius: 6px; }}
+"""
 
 
-def _hex(r, g, b):
-    return f"#{r:02x}{g:02x}{b:02x}"
+# ---------------------------------------------------------------------------
+class ColorWheel(QWidget):
+    previewed = Signal(int, int, int)
+    committed = Signal(int, int, int)
+
+    def __init__(self, diameter=240, parent=None):
+        super().__init__(parent)
+        self.d = diameter
+        self.setFixedSize(diameter, diameter)
+        self.hue, self.sat, self.value = 0.5, 1.0, 1.0
+        self._drag = False
+
+    def _geom(self):
+        m = 8
+        return self.d / 2, (self.d - 2 * m) / 2, m
+
+    def set_value(self, v):
+        self.value = v
+        self.update()
+
+    def set_hs(self, hue, sat):
+        self.hue, self.sat = hue, sat
+        self.update()
+
+    def rgb(self):
+        r, g, b = colorsys.hsv_to_rgb(self.hue, self.sat, self.value)
+        return int(round(r * 255)), int(round(g * 255)), int(round(b * 255))
+
+    def paintEvent(self, _ev):
+        cx, r, m = self._geom()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        rect = QRectF(m, m, self.d - 2 * m, self.d - 2 * m)
+
+        cg = QConicalGradient(cx, cx, 0)
+        for i in range(25):
+            cg.setColorAt(i / 24, QColor.fromHsvF(i / 24, 1.0, 1.0))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(cg)); p.drawEllipse(rect)
+
+        rg = QRadialGradient(cx, cx, r)
+        rg.setColorAt(0.0, QColor(255, 255, 255, 255))
+        rg.setColorAt(1.0, QColor(255, 255, 255, 0))
+        p.setBrush(QBrush(rg)); p.drawEllipse(rect)
+
+        if self.value < 1.0:
+            p.setBrush(QColor(0, 0, 0, int((1 - self.value) * 255)))
+            p.drawEllipse(rect)
+
+        ang = self.hue * 2 * math.pi
+        mx, my = cx + math.cos(ang) * self.sat * r, cx - math.sin(ang) * self.sat * r
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor("#000000"), 3)); p.drawEllipse(QPointF(mx, my), 7, 7)
+        p.setPen(QPen(QColor("#ffffff"), 2)); p.drawEllipse(QPointF(mx, my), 7, 7)
+        p.end()
+
+    def _from_pos(self, pos):
+        cx, r, _ = self._geom()
+        dx, dy = pos.x() - cx, pos.y() - cx
+        self.hue = (math.degrees(math.atan2(-dy, dx)) % 360) / 360.0
+        self.sat = min(math.hypot(dx, dy) / r, 1.0)
+        self.update()
+
+    def mousePressEvent(self, e):
+        self._drag = True; self._from_pos(e.position()); self.previewed.emit(*self.rgb())
+
+    def mouseMoveEvent(self, e):
+        if self._drag:
+            self._from_pos(e.position()); self.previewed.emit(*self.rgb())
+
+    def mouseReleaseEvent(self, e):
+        self._drag = False; self._from_pos(e.position()); self.committed.emit(*self.rgb())
 
 
-class App:
-    def __init__(self, root):
-        self.root = root
-        self.recent = []
-        root.title("open-m711pro — Controle de LED (M711 Pro)")
-        root.configure(bg=BG)
-        root.resizable(False, False)
-        self._build()
+# ---------------------------------------------------------------------------
+EFEITOS = ["Fixo", "Desligado", "Ciclo (em breve)", "Respiração (em breve)",
+           "Visualizador de áudio (em breve)"]
+PRESETS = [(255, 0, 0), (255, 128, 0), (255, 255, 0), (0, 255, 0),
+           (0, 255, 255), (0, 0, 255), (180, 0, 255), (255, 255, 255)]
+DPI_STAGES = [800, 1600, 2400, 3200]
+POLLING = [1000, 500, 250, 125]
 
-    # ---- construção da UI --------------------------------------------------
-    def _build(self):
-        pad = dict(padx=14, pady=6)
 
-        # Preview + info
-        header = tk.Frame(self.root, bg=BG)
-        header.pack(fill="x", **pad)
-        self.preview = tk.Frame(header, width=64, height=64, bg="#000000",
-                                highlightthickness=1, highlightbackground="#444")
-        self.preview.pack(side="left")
-        self.preview.pack_propagate(False)
-        self.info = tk.Label(header, text="Escolha uma cor", bg=BG, fg=FG,
-                             font=("TkDefaultFont", 12, "bold"), anchor="w")
-        self.info.pack(side="left", padx=12)
+class LightingPage(QWidget):
+    status = Signal(str, bool)
 
-        # Paleta
-        tk.Label(self.root, text="Paleta", bg=BG, fg=MUTED, anchor="w").pack(
-            fill="x", padx=14)
-        pal = tk.Frame(self.root, bg=BG)
-        pal.pack(**pad)
-        for row in colors.palette():
-            rf = tk.Frame(pal, bg=BG)
-            rf.pack()
-            for (r, g, b) in row:
-                self._swatch(rf, r, g, b)
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("page")
+        self.brightness = 1.0
+        root = QVBoxLayout(self); root.setContentsMargins(26, 22, 26, 22); root.setSpacing(14)
 
-        # Recentes
-        tk.Label(self.root, text="Recentes", bg=BG, fg=MUTED, anchor="w").pack(
-            fill="x", padx=14)
-        self.recent_frame = tk.Frame(self.root, bg=BG, height=SWATCH + 4)
-        self.recent_frame.pack(fill="x", padx=13, pady=(0, 6))
-        self.recent_frame.pack_propagate(False)
+        t = QLabel("ILUMINAÇÃO"); t.setObjectName("title"); root.addWidget(t)
 
-        # Ações
-        actions = tk.Frame(self.root, bg=BG)
-        actions.pack(fill="x", **pad)
-        ttk.Button(actions, text="Cor personalizada…",
-                   command=self.pick_custom).pack(side="left")
-        ttk.Button(actions, text="Desligar LED",
-                   command=self.off).pack(side="left", padx=8)
+        er = QHBoxLayout()
+        lbl = QLabel("EFEITO"); lbl.setObjectName("muted"); er.addWidget(lbl)
+        self.effect = QComboBox(); self.effect.addItems(EFEITOS)
+        self.effect.currentTextChanged.connect(self._on_effect)
+        er.addWidget(self.effect); er.addStretch(); root.addLayout(er)
 
-        # Status
-        self.status = tk.Label(self.root, text="Pronto.", bg=CARD, fg=MUTED,
-                               anchor="w", padx=10, pady=5)
-        self.status.pack(fill="x", side="bottom")
+        body = QHBoxLayout(); body.setSpacing(24)
+        self.wheel = ColorWheel(240)
+        self.wheel.previewed.connect(self._preview)
+        self.wheel.committed.connect(self._commit)
+        body.addWidget(self.wheel)
 
-    def _swatch(self, parent, r, g, b, size=SWATCH):
-        f = tk.Frame(parent, width=size, height=size, bg=_hex(r, g, b),
-                     highlightthickness=1, highlightbackground="#333", cursor="hand2")
-        f.pack(side="left", padx=1, pady=1)
-        f.pack_propagate(False)
-        f.bind("<Button-1>", lambda e, c=(r, g, b): self.set_color(*c))
+        right = QVBoxLayout(); right.setSpacing(10)
+        self.preview = QFrame(); self.preview.setFixedSize(64, 64)
+        self._set_preview_bg(0, 0, 0)
+        right.addWidget(self.preview)
+        self.readout = QLabel("—"); self.readout.setStyleSheet("font-weight:600;")
+        right.addWidget(self.readout)
 
-    # ---- ações -------------------------------------------------------------
-    def set_color(self, r, g, b):
-        try:
-            vias = device.send_color(r, g, b)
-        except device.DeviceNotFound as e:
-            self.status.config(text=f"Erro: {e}", fg="#ff6b6b")
+        bl = QLabel("BRILHO"); bl.setObjectName("muted"); right.addWidget(bl)
+        self.bright = QSlider(Qt.Horizontal); self.bright.setRange(15, 100)
+        self.bright.setValue(100); self.bright.setFixedWidth(180)
+        self.bright.valueChanged.connect(self._on_bright)
+        self.bright.sliderReleased.connect(self._commit_current)
+        right.addWidget(self.bright)
+
+        pr = QGridLayout(); pr.setSpacing(4)
+        for i, (r, g, b) in enumerate(PRESETS):
+            sw = QPushButton(); sw.setFixedSize(24, 24); sw.setCursor(Qt.PointingHandCursor)
+            sw.setStyleSheet(f"background:{self._hex(r,g,b)}; border:1px solid #2a2e38; border-radius:4px;")
+            sw.clicked.connect(lambda _=False, c=(r, g, b): self._commit_rgb(*c))
+            pr.addWidget(sw, 0, i)
+        right.addLayout(pr)
+
+        custom = QPushButton("Cor personalizada…"); custom.setObjectName("action")
+        custom.clicked.connect(self._pick_custom); right.addWidget(custom)
+        right.addStretch()
+        body.addLayout(right); body.addStretch()
+        # Container dos controles de cor — some quando o efeito não usa cor.
+        self.color_area = QWidget(); self.color_area.setLayout(body)
+        root.addWidget(self.color_area)
+
+        # Aviso mostrado no lugar quando não há cor a escolher.
+        self.no_color = QLabel("")
+        self.no_color.setObjectName("muted"); self.no_color.setWordWrap(True)
+        self.no_color.hide()
+        root.addWidget(self.no_color)
+        root.addStretch()
+
+        self._apply_saved_state()
+
+    # -- helpers
+    @staticmethod
+    def _hex(r, g, b):
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def _set_preview_bg(self, r, g, b):
+        self.preview.setStyleSheet(
+            f"background:{self._hex(r,g,b)}; border:1px solid #2a2e38; border-radius:6px;")
+
+    def _refresh(self, r, g, b):
+        self._set_preview_bg(r, g, b)
+        self.readout.setText(f"#{r:02X}{g:02X}{b:02X}   RGB({r}, {g}, {b})")
+
+    def _preview(self, r, g, b):
+        self._refresh(r, g, b)
+
+    def _commit(self, r, g, b):
+        self._refresh(r, g, b); self._send(lambda: device.send_color(r, g, b),
+                                           f"Cor #{r:02X}{g:02X}{b:02X}")
+
+    def _commit_rgb(self, r, g, b):
+        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        self.brightness = v; self.bright.setValue(int(max(v, 0.15) * 100))
+        self.wheel.value = v; self.wheel.set_hs(h, s)
+        self._commit(r, g, b)
+
+    def _commit_current(self):
+        if self.effect.currentText() != "Fixo":
             return
-        self._update_preview(r, g, b, f"enviada via {', '.join(vias)}")
-        self._add_recent(r, g, b)
+        self._commit(*self.wheel.rgb())
 
-    def off(self):
+    def _on_bright(self, val):
+        self.brightness = val / 100.0
+        self.wheel.set_value(self.brightness)
+        self._refresh(*self.wheel.rgb())
+
+    def _on_effect(self, eff):
+        fixo = (eff == "Fixo")
+        self.color_area.setVisible(fixo)     # sem cor a escolher se não for Fixo
+        self.no_color.setVisible(not fixo)
+        if eff == "Desligado":
+            self.no_color.setText("Iluminação desligada.")
+            self._send(device.send_off, "LED desligado")
+        elif fixo:
+            self.no_color.setText("")
+            self._commit_current()
+        else:
+            self.no_color.setText(f"'{eff}' ainda não implementado — o LED não foi alterado.")
+            self.status.emit(f"'{eff}' ainda não implementado.", False)
+
+    def _pick_custom(self):
+        c = QColorDialog.getColor(parent=self, title="Escolha uma cor")
+        if c.isValid():
+            self._commit_rgb(c.red(), c.green(), c.blue())
+
+    def _apply_saved_state(self):
+        """Reflete o último estado salvo pelo app (sem reenviar ao mouse)."""
+        st = state.load()
+        rgb = st.get("rgb")
+        if rgb and len(rgb) == 3:
+            h, s, v = colorsys.rgb_to_hsv(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255)
+            self.brightness = v
+            self.bright.blockSignals(True)
+            self.bright.setValue(int(max(v, 0.15) * 100))
+            self.bright.blockSignals(False)
+            self.wheel.value = v
+            self.wheel.set_hs(h, s)
+            self._refresh(*self.wheel.rgb())
+        eff = st.get("effect", "Fixo")
+        if eff not in EFEITOS:
+            eff = "Fixo"
+        self.effect.blockSignals(True)          # refletir sem disparar envio
+        self.effect.setCurrentText(eff)
+        self.effect.blockSignals(False)
+        fixo = (eff == "Fixo")
+        self.color_area.setVisible(fixo)
+        self.no_color.setVisible(not fixo)
+        if not fixo:
+            self.no_color.setText("Iluminação desligada." if eff == "Desligado"
+                                  else f"'{eff}' ainda não implementado.")
+
+    def _send(self, fn, ok):
         try:
-            vias = device.send_off()
+            vias = fn()
+            self.status.emit(f"{ok} — via {', '.join(vias)}", False)
         except device.DeviceNotFound as e:
-            self.status.config(text=f"Erro: {e}", fg="#ff6b6b")
-            return
-        self._update_preview(0, 0, 0, f"LED desligado (via {', '.join(vias)})")
+            self.status.emit(f"Erro: {e}", True)
 
-    def pick_custom(self):
-        rgb, _ = colorchooser.askcolor(title="Escolha uma cor")
-        if rgb:
-            self.set_color(int(rgb[0]), int(rgb[1]), int(rgb[2]))
 
-    # ---- helpers -----------------------------------------------------------
-    def _update_preview(self, r, g, b, msg):
-        self.preview.config(bg=_hex(r, g, b))
-        self.info.config(text=f"#{r:02X}{g:02X}{b:02X}   RGB({r}, {g}, {b})")
-        self.status.config(text=msg, fg=MUTED)
+class DpiPage(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("page")
+        root = QVBoxLayout(self); root.setContentsMargins(26, 22, 26, 22); root.setSpacing(12)
+        t = QLabel("SENSIBILIDADE (DPI)"); t.setObjectName("title"); root.addWidget(t)
+        info = QLabel("🚧 Ainda não mapeado — interface pronta, protocolo em breve "
+                      "(mapear com a skill captura).")
+        info.setStyleSheet(f"color:{ACCENT};"); info.setWordWrap(True); root.addWidget(info)
 
-    def _add_recent(self, r, g, b):
-        c = (r, g, b)
-        if c in self.recent:
-            self.recent.remove(c)
-        self.recent.insert(0, c)
-        self.recent = self.recent[:RECENT_MAX]
-        for w in self.recent_frame.winfo_children():
-            w.destroy()
-        for (rr, gg, bb) in self.recent:
-            self._swatch(self.recent_frame, rr, gg, bb)
+        root.addWidget(self._muted("VELOCIDADES DE DPI"))
+        chips = QHBoxLayout(); chips.setSpacing(6)
+        for dpi in DPI_STAGES:
+            chips.addWidget(self._chip(str(dpi), dpi == 2400))
+        chips.addStretch(); root.addLayout(chips)
+
+        sl = QSlider(Qt.Horizontal); sl.setRange(200, 12000); sl.setValue(2400)
+        sl.setEnabled(False); root.addWidget(sl)
+
+        root.addWidget(self._muted("TAXA DE RELATÓRIO (Hz)"))
+        pol = QHBoxLayout(); pol.setSpacing(6)
+        for hz in POLLING:
+            pol.addWidget(self._chip(str(hz), hz == 1000))
+        pol.addStretch(); root.addLayout(pol)
+        root.addStretch()
+
+    @staticmethod
+    def _muted(text):
+        lb = QLabel(text); lb.setObjectName("muted"); return lb
+
+    @staticmethod
+    def _chip(text, active):
+        f = QFrame(); f.setObjectName("chipActive" if active else "chip")
+        lay = QVBoxLayout(f); lay.setContentsMargins(16, 9, 16, 9)
+        lb = QLabel(text); lb.setStyleSheet(
+            f"color:{ACCENT if active else '#3a3e47'}; font-weight:{'700' if active else '400'};")
+        lay.addWidget(lb); return f
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("open-m711pro — Redragon M711 Pro")
+        self.resize(760, 500)
+
+        central = QWidget(); self.setCentralWidget(central)
+        outer = QVBoxLayout(central); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
+
+        top = QHBoxLayout(); top.setContentsMargins(0, 0, 0, 0); top.setSpacing(0)
+
+        sidebar = QWidget(); sidebar.setObjectName("sidebar"); sidebar.setFixedWidth(180)
+        sl = QVBoxLayout(sidebar); sl.setContentsMargins(0, 18, 0, 0); sl.setSpacing(0)
+        brand = QLabel("  M711 PRO"); brand.setObjectName("brand")
+        sub = QLabel("  open-m711pro"); sub.setObjectName("muted")
+        sl.addWidget(brand); sl.addWidget(sub); sl.addSpacing(18)
+
+        self.stack = QStackedWidget()
+        self.lighting = LightingPage(); self.lighting.status.connect(self._status)
+        self.stack.addWidget(self.lighting)
+        self.stack.addWidget(DpiPage())
+
+        self.nav_btns = []
+        for i, name in enumerate(["Iluminação", "Sensibilidade (DPI)"]):
+            b = QPushButton(name); b.setObjectName("nav"); b.setCheckable(True)
+            b.clicked.connect(lambda _=False, idx=i: self._go(idx))
+            sl.addWidget(b); self.nav_btns.append(b)
+        sl.addStretch()
+
+        top.addWidget(sidebar); top.addWidget(self.stack, 1)
+        outer.addLayout(top, 1)
+
+        self.status = QLabel("Pronto."); self.status.setObjectName("statusbar")
+        outer.addWidget(self.status)
+
+        self._go(0)
+
+    def _go(self, idx):
+        self.stack.setCurrentIndex(idx)
+        for i, b in enumerate(self.nav_btns):
+            b.setChecked(i == idx)
+
+    def _status(self, msg, is_error):
+        color = "#ff6b6b" if is_error else "#8b9098"
+        self.status.setStyleSheet(f"background:#191c24; color:{color}; padding:7px 12px;")
+        self.status.setText(msg)
 
 
 def main():
-    root = tk.Tk()
-    try:
-        ttk.Style().theme_use("clam")
-    except tk.TclError:
-        pass
-    App(root)
-    root.mainloop()
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(QSS)
+    win = MainWindow(); win.show()
+    app.exec()
