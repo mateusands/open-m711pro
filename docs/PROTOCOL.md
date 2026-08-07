@@ -35,13 +35,17 @@ No Linux, envie via `ioctl(HIDIOCSFEATURE)` no `/dev/hidraw` correspondente à
 ## Formato do pacote (17 bytes)
 
 ```
-08 07 <ADDR_HI> <ADDR_LO> <LEN> <DADOS...> <padding> <CHECKSUM>
-│  │  └──────┬──────┘     │     └── até LEN bytes de dados
-│  │         │            └── quantidade de bytes de dados (0x08, 0x04, 0x02...)
-│  │         └── endereço de 16 bits na memória de config do mouse
-│  └── opcode: 0x07 = escrever ; 0x04 = aplicar/commit ; 0x08 = limpar região
+08 07 00 <ADDR_HI> <ADDR_LO> <LEN> <DADOS...> <padding> <CHECKSUM>
+│  │  │  └────────┬────────┘  │    └── até LEN bytes de dados
+│  │  │           │           └── quantidade de bytes de dados (0x08, 0x04, 0x02...)
+│  │  │           └── endereço de 16 bits na memória de config do mouse
+│  │  └── sempre 00 (byte alto do endereço?)
+│  └── opcode: 0x07 = escrever ; 0x04 = aplicar/commit ; 0x08 = ler
 └── Report ID (0x08)
 ```
+
+> O endereço ocupa os bytes **3 e 4**, e o `LEN` é o byte **5**. No LED
+> (`08 07 00 00 A0 07`) isso lê como `ADDR=0x00A0`, `LEN=0x07`.
 
 O app escreve **toda** a configuração como uma sequência de pacotes `0x07`
 (um por região de memória) e finaliza com um pacote de commit (`0x04`).
@@ -134,16 +138,185 @@ Exemplo real — ler o LED (`addr 0xA0`) devolveu `04 00 00 00 96 ff bc` =
 Implementado em `device.read_led_state()`: envia a requisição por
 `HIDIOCSFEATURE` e lê o report 09 do hidraw (`os.read` + `select`).
 
+## Endereçamento de 16 bits ✅
+
+O endereço do pacote tem **dois** bytes, não um. O LED (`0x00A0`) mascarava isso
+por estar na página zero. A captura do app mostra a varredura completa:
+
+```
+08 08 00 00 00 0a     ← página 0x0000
+08 08 00 01 00 0a     ← página 0x0100
+08 08 00 02 e0 0a     ← página 0x0200
+08 08 00 19 81 0a     ← até 0x1981
+```
+
+```
+08 <op> 00 <ADDR_HI> <ADDR_LO> <LEN> <dados...> <cksum>
+         └────────┬────────┘
+                  └── endereço de 16 bits
+```
+
+A configuração principal vive em `0x0000`–`0x00A8`. As páginas `0x0100`+
+(provavelmente botões/macros) ainda **não** foram lidas — a leitura atual só
+monta o byte baixo.
+
+### Checksum por registro ✅
+
+A regra "soma ≡ `0x55` (mod 256)" não vale só para o pacote de 17 bytes e para o
+bloco de dados do LED — vale para **cada registro da memória**, com o tamanho
+dado pelo campo `LEN`:
+
+| Região | `LEN` | Exemplo |
+|--------|-------|---------|
+| `0x0000`–`0x000B` | `02` | `01 + 54 = 0x55` |
+| `0x000C`–`0x004B` | `04` (por entrada) | `2f + 2f + 00 + f7 ≡ 0x55` |
+| `0x0060`–`0x0077` | `04` (por entrada) | `01 + 10 + 00 + 44 = 0x55` |
+| `0x00A0` | `07` | LED |
+
+Verificado contra todos os 20+ registros de um dump completo do hardware.
+
+## Registrador de DPI — endereço `0x000C` ✅
+
+```
+08 07 00 00 0C 08 | X1 Y1 00 ck1 | X2 Y2 00 ck2 | 00 00 | <cksum>
+                    └── estágio 1 ┘└── estágio 2 ┘
+```
+
+Cada estágio ocupa **4 bytes**: `X`, `Y`, `00`, checksum interno do registro.
+`X` e `Y` são os eixos — o app os mantém iguais (eixos travados), mas o formato
+suporta valores independentes.
+
+São **5 estágios**, escritos em três pacotes:
+
+| Endereço | `LEN` | Estágios |
+|----------|-------|----------|
+| `0x000C` | `08` | 1 e 2 |
+| `0x0014` | `08` | 3 e 4 |
+| `0x001C` | `04` | 5 |
+
+`0x0020`–`0x002B` contém lixo (`bd bd 00 db`) e **não** é escrito pelo app.
+
+### Codificação do valor ✅
+
+```python
+n = round(dpi * 0.012) - 1        # DPI -> byte
+dpi = (n + 1) * 250 / 3           # byte -> DPI  (passo de ~83,33 DPI)
+```
+
+Confirmado com **6 valores conhecidos** lidos na tela do app oficial e cruzados
+com a captura:
+
+| DPI no app | Byte | Origem |
+|------------|------|--------|
+| 700 | `07` | estágio 1 (padrão do dono) |
+| 1000 | `0b` | escrito durante a captura |
+| 2000 | `17` | estágio 2 |
+| 4000 | `2f` | estágio 3 |
+| 8000 | `5f` | estágio 4 |
+| **10000** | **`77`** | escrito durante a captura — o valor que desempatou |
+
+> O 10000 foi o experimento decisivo: a hipótese concorrente (escala ancorada no
+> máximo, passo 84,21) previa `76`. A captura trouxe `77`.
+
+Pacotes de captura (todos fecham em `0x55`):
+
+```
+08 07 00 00 0c 08 07 07 00 47 17 17 00 27 00 00 88     estágio 1 =   700
+08 07 00 00 0c 08 0b 0b 00 3f 17 17 00 27 00 00 88     estágio 1 =  1000
+08 07 00 00 0c 08 17 17 00 27 17 17 00 27 00 00 88     estágio 1 =  2000
+08 07 00 00 0c 08 77 77 00 67 17 17 00 27 00 00 88     estágio 1 = 10000
+08 07 00 00 14 08 2f 2f 00 f7 5f 5f 00 97 00 00 80     estágios 3/4
+08 07 00 00 1c 04 bd bd 00 db 00 00 00 00 00 00 d1     estágio 5
+```
+
+**Anomalia conhecida** 🚧: o estágio 5 lê `bd` (= 15833 DPI pela fórmula), mas o
+app rotula "16000" (que daria `bf`). Como o estágio 5 nunca foi alterado nas
+capturas, `bd` é provavelmente valor de fábrica no teto do firmware, com o app
+arredondando o rótulo do slider. Falta capturar uma escrita explícita de 16000.
+
+### Faixa aceita pela implementação
+
+O código limita o DPI a **100–16000** e o byte resultante a **`0x00`–`0xBD`** —
+o intervalo que já vimos o firmware segurar. Acima de `0xBD` é território nunca
+observado, e a regra de ouro do repo proíbe mandar byte sem captura.
+
+Consequência a respeitar em qualquer código que escreva a tabela: a conversão
+**byte → DPI → byte é identidade apenas em `0x00`–`0xBD`**; de `0xBE` a `0xFF`
+tudo colapsa em `0xBD`. Por isso, ao mudar um estágio, os outros quatro têm que
+ser reescritos a partir dos **bytes lidos**, nunca reconstruídos a partir do DPI
+— senão um estágio acima de `0xBD` seria rebaixado em silêncio.
+(`device.read_dpi_bytes()` / `protocol.build_dpi_table_bytes()` existem para
+isso, e `tests/test_protocol.py` trava a propriedade.)
+
+### Campos vizinhos 🚧
+
+| Endereço | `LEN` | Valor | Significado provável |
+|----------|-------|-------|----------------------|
+| `0x0000` | `02` | `01` | estágio de DPI ativo |
+| `0x0002` | `02` | `05` | quantidade de estágios |
+| `0x002C`–`0x003F` | `08`/`08`/`04` | — | **cor de cada estágio** (`R G B ck`) |
+
+As cores são o indicador visual do nível de DPI. A ordem foi travada pelo
+screenshot do app: estágio 2 = azul (`00 00 ff`) e estágio 3 = verde
+(`00 ff 00`) batem sem ambiguidade com os quadradinhos da interface.
+Marcados 🚧 porque **nenhuma captura mudou** esses campos ainda — o significado
+vem de correlação, não de diff isolado.
+
+## Efeito de DPI ("DPI Effect") — endereço `0x004C` ✅
+
+Isolado em diff limpo: o app reescreve a config inteira, e ao ligar/desligar o
+"DPI Effect" **só** este registrador mudou.
+
+```
+08 07 00 00 4c 06 01 54 01 54 03 52 00 00 00 00 f5     "Steady" (ligado)
+08 07 00 00 4c 02 00 55 00 00 00 00 00 00 00 00 a3     desligado
+```
+
+| Valor de `0x004C` | Estado |
+|-------------------|--------|
+| `01` | Steady (ligado) |
+| `00` | desligado |
+
+Ligado, o app escreve três registros de 2 bytes (`0x4C`=`01`, `0x4E`=`01`,
+`0x50`=`03`); desligado, escreve só o `0x4C`. Isso indica que os três formam o
+**grupo** do efeito — o app tem um slider de *Brightness* logo abaixo do
+dropdown. O significado de `0x4E` e `0x50` ainda é 🚧.
+
+O dropdown do app tem outras opções além de "Steady" — faltam capturas delas.
+
+## Handshake 🚧
+
+Antes das escritas, o app manda:
+
+```
+08 01 00 00 00 04 62 30 61 58 00 00 00 00 00 00 fd
+                  └─ ASCII "b0aX" ─┘
+```
+
+As escritas de LED funcionam **sem** ele, então não parece obrigatório. Uma
+amostra só — não implementar até entender.
+
 ## Status / TODO
 
 - [x] Transporte (Feature Report, interface 1)
-- [x] Formato do pacote + checksums (externo e interno, soma ≡ 0x55 mod 256)
+- [x] Formato do pacote + checksums — a soma ≡ `0x55` vale **por registro** da
+      memória, não só no pacote de 17 bytes
+- [x] **Endereçamento de 16 bits** (bytes 3–4 do pacote)
 - [x] Cor sólida do LED (`0x00A0`)
 - [x] Liga/desliga do LED (efeito `0x04`)
 - [x] **Brilho** do LED (byte 5) — validado (50% = `0x32`)
 - [x] **Efeitos animados**: Ciclo (`00`, vel `13`) e Respiração (`01`, vel `be`) — validados
-- [ ] **DPI / polling** — registros `0x00`/`0x0c` mudam na captura, mas os valores
-      não bateram óbvio; precisa de captura dedicada (DPI 800/1600 isolados)
+- [x] **DPI** (`0x000C`) — 5 estágios × 4 bytes (`X Y 00 ck`), fórmula
+      `n = round(DPI × 0,012) − 1` validada com 6 valores conhecidos
+- [x] **DPI Effect** (`0x004C`) — `01` = Steady, `00` = desligado
+- [ ] Demais opções do dropdown de DPI Effect (só o "Steady" foi capturado)
+- [ ] Campos `0x004E`/`0x0050` do grupo do DPI Effect
+- [ ] `0x0000` (estágio ativo) e `0x0002` (contagem) — nunca vistos mudando
+- [ ] Cores por estágio (`0x002C`) — significado por correlação, falta diff isolado
+- [ ] **Polling rate** — candidato em `0x0078` (`09`), sem captura que confirme
+- [ ] Botões (`0x0060`–`0x0077`, `01 <bitmask> 00 ck`) — estrutura clara, semântica não
+- [ ] Páginas `0x0100`–`0x1981` (macros?) — nunca lidas; a leitura só monta o byte baixo
+- [ ] Handshake `08 01 ... "b0aX"` — uma amostra, propósito desconhecido
 - [x] **Leitura do estado (nível 2)** do LED — resposta por interrupt IN (Report 09)
 - [x] **Velocidade** dos efeitos (byte 4) — slider na GUI (faixa interpolada)
 - [ ] Cabo (`FA08`): protocolo mapeado só pelo `FA07` (mas já funciona no cabo)

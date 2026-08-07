@@ -57,11 +57,20 @@ completo, ou **"Desligar LED"**. A cor é aplicada ao vivo.
 **Linha de comando:**
 
 ```bash
-python3 main.py FF0000      # vermelho (hex)
-python3 main.py 0 255 0     # verde (R G B)
-python3 main.py azul        # cor por nome
-python3 main.py off         # desliga o LED
+python3 main.py FF0000        # vermelho (hex)
+python3 main.py 0 255 0       # verde (R G B)
+python3 main.py azul          # cor por nome
+python3 main.py off           # desliga o LED
+
+python3 main.py dpi           # mostra os 5 estágios lidos do mouse
+python3 main.py dpi 1600      # um DPI só: aplica aos 5 estágios
+python3 main.py dpi 3 4000    # muda só o estágio 3
+python3 main.py dpi-effect on # LED indicador de nível de DPI (on/off)
 ```
+
+> O mouse guarda o DPI em passos de ~83, então o valor exibido é o que ele
+> realmente tem: pedir 1600 resulta em 1583. Preferimos mostrar a verdade a
+> arredondar por conta própria.
 
 ## Estrutura do projeto
 
