@@ -1,0 +1,18 @@
+# Capturas USB (grandes; não versionar)
+*.pcap
+*.pcapng
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Editor / SO
+.vscode/
+.idea/
+*.swp
+.DS_Store
+.pytest_cache/
+.venv/
