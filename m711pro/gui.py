@@ -84,7 +84,8 @@ class ColorWheel(QWidget):
         self.update()
 
     def rgb(self):
-        r, g, b = colorsys.hsv_to_rgb(self.hue, self.sat, self.value)
+        # cor "cheia" (value=1.0); o brilho é um byte separado no protocolo.
+        r, g, b = colorsys.hsv_to_rgb(self.hue, self.sat, 1.0)
         return int(round(r * 255)), int(round(g * 255)), int(round(b * 255))
 
     def paintEvent(self, _ev):
@@ -134,8 +135,9 @@ class ColorWheel(QWidget):
 
 
 # ---------------------------------------------------------------------------
-EFEITOS = ["Fixo", "Desligado", "Ciclo (em breve)", "Respiração (em breve)",
+EFEITOS = ["Fixo", "Respiração", "Ciclo", "Desligado",
            "Visualizador de áudio (em breve)"]
+COLOR_EFFECTS = {"Fixo", "Respiração", "Ciclo"}   # efeitos que usam a cor escolhida
 PRESETS = [(255, 0, 0), (255, 128, 0), (255, 255, 0), (0, 255, 0),
            (0, 255, 255), (0, 0, 255), (180, 0, 255), (255, 255, 255)]
 DPI_STAGES = [800, 1600, 2400, 3200]
@@ -148,7 +150,6 @@ class LightingPage(QWidget):
     def __init__(self):
         super().__init__()
         self.setObjectName("page")
-        self.brightness = 1.0
         root = QVBoxLayout(self); root.setContentsMargins(26, 22, 26, 22); root.setSpacing(14)
 
         t = QLabel("ILUMINAÇÃO"); t.setObjectName("title"); root.addWidget(t)
@@ -178,6 +179,14 @@ class LightingPage(QWidget):
         self.bright.valueChanged.connect(self._on_bright)
         self.bright.sliderReleased.connect(self._commit_current)
         right.addWidget(self.bright)
+
+        # Velocidade — só aparece nos efeitos animados
+        self.speed_label = QLabel("VELOCIDADE (Lenta → Rápida)")
+        self.speed_label.setObjectName("muted"); right.addWidget(self.speed_label)
+        self.speed = QSlider(Qt.Horizontal); self.speed.setRange(0, 100)
+        self.speed.setValue(50); self.speed.setFixedWidth(180)
+        self.speed.sliderReleased.connect(self._commit_current)
+        right.addWidget(self.speed)
 
         pr = QGridLayout(); pr.setSpacing(4)
         for i, (r, g, b) in enumerate(PRESETS):
@@ -213,41 +222,73 @@ class LightingPage(QWidget):
         self.preview.setStyleSheet(
             f"background:{self._hex(r,g,b)}; border:1px solid #2a2e38; border-radius:6px;")
 
+    def _bright_pct(self):
+        return self.bright.value()               # 0–100
+
+    def _bright_byte(self):
+        pct = self._bright_pct()                 # 100% = 0xFF; abaixo = a % direta
+        return 0xFF if pct >= 100 else pct
+
     def _refresh(self, r, g, b):
-        self._set_preview_bg(r, g, b)
-        self.readout.setText(f"#{r:02X}{g:02X}{b:02X}   RGB({r}, {g}, {b})")
+        pct = self._bright_pct()                 # preview mostra a cor já com o brilho
+        self._set_preview_bg(r * pct // 100, g * pct // 100, b * pct // 100)
+        self.readout.setText(f"#{r:02X}{g:02X}{b:02X}   RGB({r}, {g}, {b})   {pct}%")
 
     def _preview(self, r, g, b):
         self._refresh(r, g, b)
 
+    def _send_fn(self):
+        return {"Fixo": device.send_color,
+                "Respiração": device.send_breathing,
+                "Ciclo": device.send_cycle}.get(self.effect.currentText())
+
+    def _speed_byte(self):
+        # slider 0%(lenta) → 100%(rápida); byte menor = mais rápido (0xF0..0x08)
+        pct = self.speed.value()
+        return int(round(0xF0 - pct / 100 * (0xF0 - 0x08)))
+
     def _commit(self, r, g, b):
-        self._refresh(r, g, b); self._send(lambda: device.send_color(r, g, b),
-                                           f"Cor #{r:02X}{g:02X}{b:02X}")
+        eff = self.effect.currentText()
+        fn = self._send_fn()
+        if fn is None:
+            return
+        self._refresh(r, g, b)
+        bb = self._bright_byte()
+        if eff in ("Respiração", "Ciclo"):
+            sp = self._speed_byte()
+            call = lambda: fn(r, g, b, brightness=bb, speed=sp)
+        else:
+            call = lambda: fn(r, g, b, brightness=bb)
+        self._send(call, f"{eff} #{r:02X}{g:02X}{b:02X} ({self._bright_pct()}%)")
 
     def _commit_rgb(self, r, g, b):
-        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
-        self.brightness = v; self.bright.setValue(int(max(v, 0.15) * 100))
-        self.wheel.value = v; self.wheel.set_hs(h, s)
+        h, s, _ = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        self.wheel.set_hs(h, s)                  # presets mantêm o brilho do slider
         self._commit(r, g, b)
 
     def _commit_current(self):
-        if self.effect.currentText() != "Fixo":
+        if self._send_fn() is None:
             return
         self._commit(*self.wheel.rgb())
 
-    def _on_bright(self, val):
-        self.brightness = val / 100.0
-        self.wheel.set_value(self.brightness)
+    def _on_bright(self, _val):
+        self.wheel.set_value(self._bright_pct() / 100.0)   # escurece a roda (visual)
         self._refresh(*self.wheel.rgb())
 
+    def _speed_visible(self, eff):
+        show = eff in ("Respiração", "Ciclo")   # velocidade só nos animados
+        self.speed_label.setVisible(show)
+        self.speed.setVisible(show)
+
     def _on_effect(self, eff):
-        fixo = (eff == "Fixo")
-        self.color_area.setVisible(fixo)     # sem cor a escolher se não for Fixo
-        self.no_color.setVisible(not fixo)
+        has_color = eff in COLOR_EFFECTS     # Fixo/Respiração/Ciclo usam cor
+        self.color_area.setVisible(has_color)
+        self.no_color.setVisible(not has_color)
+        self._speed_visible(eff)
         if eff == "Desligado":
             self.no_color.setText("Iluminação desligada.")
             self._send(device.send_off, "LED desligado")
-        elif fixo:
+        elif has_color:
             self.no_color.setText("")
             self._commit_current()
         else:
@@ -260,28 +301,37 @@ class LightingPage(QWidget):
             self._commit_rgb(c.red(), c.green(), c.blue())
 
     def _apply_saved_state(self):
-        """Reflete o último estado salvo pelo app (sem reenviar ao mouse)."""
-        st = state.load()
+        """Reflete o estado ATUAL — lê do hardware (nível 2); se falhar, usa a
+        persistência local (nível 1). Não reenvia nada ao mouse."""
+        st = device.read_led_state() or state.load()
         rgb = st.get("rgb")
         if rgb and len(rgb) == 3:
-            h, s, v = colorsys.rgb_to_hsv(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255)
-            self.brightness = v
-            self.bright.blockSignals(True)
-            self.bright.setValue(int(max(v, 0.15) * 100))
-            self.bright.blockSignals(False)
-            self.wheel.value = v
+            h, s, _ = colorsys.rgb_to_hsv(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255)
             self.wheel.set_hs(h, s)
-            self._refresh(*self.wheel.rgb())
+        bb = st.get("brightness", 0xFF)
+        pct = 100 if bb >= 0xFF else int(bb)
+        self.bright.blockSignals(True)
+        self.bright.setValue(pct)
+        self.bright.blockSignals(False)
+        self.wheel.set_value(pct / 100.0)
+        self._refresh(*self.wheel.rgb())
+        sp = st.get("speed")
+        if sp is not None:
+            spct = max(0, min(100, round((0xF0 - sp) / (0xF0 - 0x08) * 100)))
+            self.speed.blockSignals(True)
+            self.speed.setValue(spct)
+            self.speed.blockSignals(False)
         eff = st.get("effect", "Fixo")
         if eff not in EFEITOS:
             eff = "Fixo"
         self.effect.blockSignals(True)          # refletir sem disparar envio
         self.effect.setCurrentText(eff)
         self.effect.blockSignals(False)
-        fixo = (eff == "Fixo")
-        self.color_area.setVisible(fixo)
-        self.no_color.setVisible(not fixo)
-        if not fixo:
+        has_color = eff in COLOR_EFFECTS
+        self.color_area.setVisible(has_color)
+        self.no_color.setVisible(not has_color)
+        self._speed_visible(eff)
+        if not has_color:
             self.no_color.setText("Iluminação desligada." if eff == "Desligado"
                                   else f"'{eff}' ainda não implementado.")
 
