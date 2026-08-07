@@ -7,10 +7,15 @@ vezes para vencer o "sono" do mouse wireless.
 import os
 import glob
 import time
+import select
 import fcntl
 
-from .protocol import build_color, build_off, build_commit
+from .protocol import (build_color, build_breathing, build_cycle, build_off,
+                       build_commit, build_read, SPEED_RESPIRACAO, SPEED_CICLO)
 from . import state
+
+EFFECT_NAMES = {0x00: "Ciclo", 0x01: "Respiração", 0x02: "Fixo", 0x04: "Desligado"}
+LED_ADDR = 0xA0
 
 VID = 0x25A7
 PIDS = [0xFA07, 0xFA08]        # FA07 = receptor 2.4G ; FA08 = mouse (cabo/BT)
@@ -99,9 +104,21 @@ def send_packet(pkt):
     return ok
 
 
-def send_color(r, g, b):
-    vias = send_packet(build_color(r, g, b))
-    state.save({"effect": "Fixo", "rgb": [r, g, b]})
+def send_color(r, g, b, brightness=0xFF):
+    vias = send_packet(build_color(r, g, b, brightness=brightness))
+    state.save({"effect": "Fixo", "rgb": [r, g, b], "brightness": brightness})
+    return vias
+
+
+def send_breathing(r, g, b, brightness=0xFF, speed=SPEED_RESPIRACAO):
+    vias = send_packet(build_breathing(r, g, b, brightness=brightness, speed=speed))
+    state.save({"effect": "Respiração", "rgb": [r, g, b], "brightness": brightness, "speed": speed})
+    return vias
+
+
+def send_cycle(r, g, b, brightness=0xFF, speed=SPEED_CICLO):
+    vias = send_packet(build_cycle(r, g, b, brightness=brightness, speed=speed))
+    state.save({"effect": "Ciclo", "rgb": [r, g, b], "brightness": brightness, "speed": speed})
     return vias
 
 
@@ -111,3 +128,46 @@ def send_off():
     st["effect"] = "Desligado"
     state.save(st)
     return vias
+
+
+# --- Leitura do estado real do hardware (nível 2) ---------------------------
+def read_register(addr, length=8, timeout=0.6):
+    """Envia a requisição de leitura e captura o response (interrupt IN, Report
+    ID 09). Retorna os bytes do report ou None se não veio a tempo."""
+    devices = find_devices()
+    if not devices:
+        raise DeviceNotFound("mouse não encontrado")
+    dev, _ = devices[0]
+    fd = os.open(dev, os.O_RDWR | os.O_NONBLOCK)
+    try:
+        fcntl.ioctl(fd, _HIDIOCSFEATURE(17), bytearray(build_read(addr, length)))
+        end = time.monotonic() + timeout
+        while True:
+            rem = end - time.monotonic()
+            if rem <= 0:
+                return None
+            if not select.select([fd], [], [], rem)[0]:
+                return None
+            try:
+                data = os.read(fd, 64)
+            except (BlockingIOError, OSError):
+                continue
+            if (len(data) >= 12 and data[0] == 0x09 and data[1] == 0x08
+                    and data[4] == (addr & 0xFF)):
+                return data
+    finally:
+        os.close(fd)
+
+
+def read_led_state():
+    """Lê o estado atual do LED direto do mouse. Retorna dict (mesmo formato do
+    state persistido) ou None se a leitura falhar."""
+    try:
+        resp = read_register(LED_ADDR, 8)
+    except (DeviceNotFound, OSError):
+        return None
+    if not resp or len(resp) < 12:
+        return None
+    effect = EFFECT_NAMES.get(resp[6], "Fixo")
+    return {"effect": effect, "rgb": [resp[7], resp[8], resp[9]],
+            "speed": resp[10], "brightness": resp[11]}
