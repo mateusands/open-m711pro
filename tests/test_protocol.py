@@ -12,6 +12,21 @@ def test_verde_bate_com_captura():
     assert p.build_color(0, 255, 0).hex() == "08070000a0070200ff0096ffbf0000004a"
 
 
+def test_brilho_50_bate_com_captura():
+    # capturado no mapeamento: verde a 50% de brilho -> byte 0x32
+    assert p.build_color(0, 255, 0, brightness=0x32).hex() == "08070000a0070200ff0096328c0000004a"
+
+
+def test_respiracao_bate_com_captura():
+    # capturado: respiração em vermelho, velocidade 0xBE
+    assert p.build_breathing(255, 0, 0).hex() == "08070000a00701ff0000beff980000004a"
+
+
+def test_ciclo_bate_com_captura():
+    # capturado: ciclo ("LED correndo") em vermelho, velocidade 0x13
+    assert p.build_cycle(255, 0, 0).hex() == "08070000a00700ff000013ff440000004a"
+
+
 def test_off_bate_com_captura():
     # captura do OFF com a cor vermelha ainda no registrador
     assert p.build_led(p.MODE_OFF, 255, 0, 0).hex() == "08070000a00704ff000096ffbd0000004a"
