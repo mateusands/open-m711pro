@@ -10,6 +10,7 @@ import time
 import fcntl
 
 from .protocol import build_color, build_off, build_commit
+from . import state
 
 VID = 0x25A7
 PIDS = [0xFA07, 0xFA08]        # FA07 = receptor 2.4G ; FA08 = mouse (cabo/BT)
@@ -99,8 +100,14 @@ def send_packet(pkt):
 
 
 def send_color(r, g, b):
-    return send_packet(build_color(r, g, b))
+    vias = send_packet(build_color(r, g, b))
+    state.save({"effect": "Fixo", "rgb": [r, g, b]})
+    return vias
 
 
 def send_off():
-    return send_packet(build_off())
+    vias = send_packet(build_off())
+    st = state.load()
+    st["effect"] = "Desligado"
+    state.save(st)
+    return vias
