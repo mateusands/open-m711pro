@@ -101,10 +101,9 @@ class ColorWheel(tk.Canvas):
 # ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
-EFFECTS = ["Steady", "Off", "Cycle (coming soon)", "Breathing (coming soon)",
-           "Audio visualiser (coming soon)"]
-DPI_STAGES = [800, 1600, 2400, 3200]   # placeholder for the informational panel
-POLLING = [1000, 500, 250, 125]
+EFFECTS = ["Steady", "Breathing", "Cycle", "Off"]
+COLOR_EFFECTS = {"Steady", "Breathing", "Cycle"}   # effects that use the colour
+
 
 
 class App:
@@ -229,93 +228,53 @@ class App:
                    command=self._pick_custom).pack(anchor="w", pady=(4, 0))
         return p
 
-    # ---- page: Sensitivity (DPI) — informational only ------------------------------
+    # ---- page: Sensitivity (DPI) -----------------------------------------
     def _page_dpi(self):
+        """This fallback covers lighting only — say so instead of faking panels.
+
+        DPI, buttons and polling rate are fully implemented in the core; they are
+        reachable from the Qt interface and the command line. Drawing dead
+        widgets here would misrepresent what the app can do.
+        """
         p = tk.Frame(self.content, bg=T.BG)
         tk.Label(p, text="SENSITIVITY (DPI)", bg=T.BG, fg=T.FG,
                  font=(T.FONT, 16, "bold")).pack(anchor="w")
-        tk.Label(p, text="Configure DPI from the Qt interface or the command line; "
-                 "this fallback UI only covers lighting.", bg=T.BG, fg=T.ACCENT,
-                 wraplength=440, justify="left").pack(anchor="w", pady=(6, 16))
-
-        tk.Label(p, text="VELOCIDADES DE DPI", bg=T.BG, fg=T.MUTED,
-                 font=(T.FONT, 9)).pack(anchor="w")
-        chips = tk.Frame(p, bg=T.BG); chips.pack(anchor="w", pady=8)
-        for i, dpi in enumerate(DPI_STAGES):
-            active = (dpi == 2400)
-            tk.Label(chips, text=str(dpi), bg=T.PANEL_HI if active else T.PANEL,
-                     fg=T.ACCENT if active else T.DISABLED, padx=14, pady=8,
-                     font=(T.FONT, 11, "bold" if active else "normal")).pack(
-                     side="left", padx=3)
-
-        tk.Scale(p, from_=200, to=12000, orient="horizontal", length=420,
-                 bg=T.BG, fg=T.DISABLED, troughcolor=T.PANEL, highlightthickness=0,
-                 state="disabled").pack(anchor="w", pady=14)
-
-        tk.Label(p, text="POLLING RATE (Hz)", bg=T.BG, fg=T.MUTED,
-                 font=(T.FONT, 9)).pack(anchor="w")
-        pol = tk.Frame(p, bg=T.BG); pol.pack(anchor="w", pady=8)
-        for hz in POLLING:
-            active = (hz == 1000)
-            tk.Label(pol, text=str(hz), bg=T.PANEL_HI if active else T.PANEL,
-                     fg=T.ACCENT if active else T.DISABLED, padx=12, pady=6).pack(
-                     side="left", padx=3)
+        tk.Label(p, text="This is the tkinter fallback, used when PySide6 is not "
+                 "installed. It covers lighting only.",
+                 bg=T.BG, fg=T.MUTED, wraplength=440,
+                 justify="left").pack(anchor="w", pady=(6, 14))
+        tk.Label(p, text="DPI, buttons and polling rate are available in:",
+                 bg=T.BG, fg=T.FG).pack(anchor="w")
+        for line in ("the Qt interface  -  pip install PySide6",
+                     "the command line  -  python3 -m m711pro dpi 1600",
+                     "                     python3 -m m711pro buttons",
+                     "                     python3 -m m711pro polling 500"):
+            tk.Label(p, text="   " + line, bg=T.BG, fg=T.ACCENT,
+                     font=(T.FONT, 10)).pack(anchor="w", pady=1)
         return p
-
-    # ---- colour logic -----------------------------------------------------
-    def _rgb_from_state(self):
-        r, g, b = colorsys.hsv_to_rgb(self.hue, self.sat, self.brightness)
-        return int(round(r * 255)), int(round(g * 255)), int(round(b * 255))
-
-    def _refresh_preview(self):
-        r, g, b = self._rgb_from_state()
-        self.preview.config(bg=_hex(r, g, b))
-        self.readout.config(text=f"#{r:02X}{g:02X}{b:02X}   RGB({r}, {g}, {b})")
-
-    def _preview_hs(self, hue, sat):
-        self.hue, self.sat = hue, sat
-        self._refresh_preview()
-
-    def _commit_hs(self, hue, sat):
-        self.hue, self.sat = hue, sat
-        self._commit_current()
-
-    def _commit_rgb(self, rgb):
-        r, g, b = rgb
-        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
-        self.hue, self.sat, self.brightness = h, s, v
-        self.bright.set(max(v, 0.15))
-        self.wheel.set_marker_hs(h, s)
-        self._commit_current()
-
-    def _on_bright(self, val):
-        self.brightness = float(val)
-        self._refresh_preview()
 
     def _on_effect(self, _e=None):
         eff = self.effect.get()
-        steady = (eff == "Steady")
-        if steady:
+        if eff in COLOR_EFFECTS:
             self.body.pack(anchor="w", fill="x", pady=6)   # show the palette
-        else:
-            self.body.pack_forget()                        # hide unless the effect is Steady
-        if eff == "Off":
-            self._send(device.send_off, "LED off")
-        elif steady:
             self._commit_current()
         else:
-            self.status.config(text=f"'{eff}' is not implemented yet.", fg=T.ACCENT)
+            self.body.pack_forget()
+            self._send(device.send_off, "LED off")
 
     def _commit_current(self):
-        if self.effect.get() != "Steady":
+        eff = self.effect.get()
+        if eff not in COLOR_EFFECTS:
             return
+        send = {"Steady": device.send_color,
+                "Breathing": device.send_breathing,
+                "Cycle": device.send_cycle}[eff]
         r, g, b = self._rgb_from_state()
         self._refresh_preview()
-        self._send(lambda: device.send_color(r, g, b),
-                   f"Cor #{r:02X}{g:02X}{b:02X}")
+        self._send(lambda: send(r, g, b), f"{eff} #{r:02X}{g:02X}{b:02X}")
 
     def _pick_custom(self):
-        rgb, _ = colorchooser.askcolor(title="Escolha uma cor")
+        rgb, _ = colorchooser.askcolor(title="Pick a colour")
         if rgb:
             self._commit_rgb((int(rgb[0]), int(rgb[1]), int(rgb[2])))
 
