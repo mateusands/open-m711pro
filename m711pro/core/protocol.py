@@ -150,6 +150,130 @@ def build_dpi_table(stages):
     return build_dpi_table_bytes([dpi_to_byte(d) for d in stages])
 
 
+# --- Botões (registradores 0x0060–0x009F) -----------------------------------
+# 16 registros de 4 bytes: TIPO, P1, P2, checksum do registro. São escritos em
+# oito pacotes de LEN 8 (dois botões por pacote), como o app oficial faz.
+#
+# A tabela de tipos foi decodificada aplicando um perfil com ações conhecidas e
+# lendo a memória antes e depois. O layout de 16 entradas e o endereço do slot
+# estendido vieram do m913-ctl (github.com/Qehbr/m913-ctl, GPL-3.0), que mapeou
+# o mesmo chip Compx no Redragon M913 — e foram conferidos contra este mouse.
+BUTTON_ADDR = 0x0060
+BUTTON_COUNT = 16
+BUTTONS_PER_PACKET = 2
+
+BTN_NONE = (0x00, 0x00, 0x00)      # sem ação / desabilitado
+BTN_EXTENDED = (0x05, 0x00, 0x00)  # a ação vive no slot estendido (ver build_media)
+
+MOUSE_LEFT = 0x01
+MOUSE_RIGHT = 0x02
+MOUSE_MIDDLE = 0x04
+MOUSE_BACK = 0x08
+MOUSE_FORWARD = 0x10
+
+
+def btn_mouse(mask):
+    """Botão de mouse comum. `mask` é um dos MOUSE_*."""
+    return (0x01, mask & 0xFF, 0x00)
+
+
+def btn_dpi_up():
+    return (0x02, 0x02, 0x00)
+
+
+def btn_dpi_down():
+    return (0x02, 0x03, 0x00)
+
+
+def btn_dpi_cycle():
+    return (0x02, 0x01, 0x00)
+
+
+def btn_fire(speed=0x3A, clicks=3):
+    """Disparo repetido. `speed` 3–255 (menor = mais rápido), `clicks` 0–3.
+
+    "Three click" do app é este mesmo tipo com velocidade 0x32 e 3 cliques.
+    """
+    return (0x04, speed & 0xFF, clicks & 0xFF)
+
+
+def btn_three_click():
+    return btn_fire(speed=0x32, clicks=3)
+
+
+def btn_rgb_toggle():
+    """Liga/desliga o LED.
+
+    ⚠️ O m913-ctl atribui `0x07` ao "polling switch" e `0x08` ao "led toggle" —
+    o inverso disto. Aqui seguimos o que foi medido neste mouse: atribuindo
+    "RGB ON/OFF" pelo app oficial, o registrador virou `07`. Ver PROTOCOL.md.
+    """
+    return (0x07, 0x00, 0x00)
+
+
+def btn_polling_switch():
+    """Alterna a taxa de relatório. Ver a ressalva em btn_rgb_toggle()."""
+    return (0x08, 0x00, 0x00)
+
+
+def build_buttons(actions):
+    """Os OITO pacotes que escrevem a tabela de botões inteira.
+
+    `actions` são 16 tuplas (TIPO, P1, P2) — uma por índice de botão. O
+    protocolo escreve a tabela toda, então quem muda um botão precisa passar os
+    outros quinze como estão (ver device.send_button).
+    """
+    if len(actions) != BUTTON_COUNT:
+        raise ValueError(f"a tabela precisa de {BUTTON_COUNT} ações, "
+                         f"recebi {len(actions)}")
+    pkts = []
+    for i in range(0, BUTTON_COUNT, BUTTONS_PER_PACKET):
+        dados = []
+        for a in actions[i:i + BUTTONS_PER_PACKET]:
+            dados += record(list(a))
+        pkts.append(build_write(BUTTON_ADDR + 4 * i, dados))
+    return pkts
+
+
+# --- Slot estendido: multimídia e teclado -----------------------------------
+# Ações que não cabem nos 3 bytes do registro básico ficam num slot de 32 bytes.
+# O botão guarda BTN_EXTENDED e o slot guarda o evento de apertar e o de soltar.
+EXT_SLOT_BASE = 0x0100
+EXT_SLOT_STRIDE = 0x20
+EVENT_MEDIA_DOWN = 0x82        # apertar, página HID Consumer
+EVENT_MEDIA_UP = 0x42          # soltar
+
+# Usages da HID Consumer Page. Os quatro primeiros foram confirmados neste
+# mouse; os demais vêm da tabela do m913-ctl.
+MEDIA_PLAY_PAUSE = 0x00CD      # ✅ confirmado
+MEDIA_NEXT = 0x00B5            # ✅ confirmado
+MEDIA_PREVIOUS = 0x00B6        # ✅ confirmado
+MEDIA_MUTE = 0x00E2            # ✅ confirmado
+MEDIA_STOP = 0x00B7
+MEDIA_VOL_UP = 0x00E9
+MEDIA_VOL_DOWN = 0x00EA
+
+
+def ext_slot_addr(index):
+    """Endereço do slot estendido do botão `index`."""
+    if not 0 <= index < BUTTON_COUNT:
+        raise ValueError(f"índice de botão fora de 0..{BUTTON_COUNT - 1}")
+    return EXT_SLOT_BASE + EXT_SLOT_STRIDE * index
+
+
+def build_media(index, usage):
+    """Grava uma tecla de multimídia no slot estendido do botão `index`.
+
+    `usage` é o código de 16 bits da HID Consumer Page (MEDIA_*). O registro
+    guarda o evento de apertar e o de soltar com o mesmo código.
+
+    Para o botão funcionar, o registro básico dele tem que ser BTN_EXTENDED.
+    """
+    lo, hi = usage & 0xFF, (usage >> 8) & 0xFF
+    data = record([0x02, EVENT_MEDIA_DOWN, lo, hi, EVENT_MEDIA_UP, lo, hi])
+    return build_write(ext_slot_addr(index), data)
+
+
 # --- Efeito de DPI (registrador 0x004C) -------------------------------------
 DPI_EFFECT_ADDR = 0x004C
 DPI_EFFECT_STEADY = 0x01

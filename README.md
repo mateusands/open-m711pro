@@ -109,10 +109,28 @@ pytest
 ## Roadmap
 
 1. ✅ Cor e liga/desliga do LED (GUI + CLI, dongle e cabo)
-2. Brilho e efeitos do LED (bytes `96 FF` do registrador `0xA0`)
-3. DPI e polling rate
-4. Remapeamento de botões e macros
-5. Empacotar (`.desktop` / PyInstaller) e portar a GUI pra outros sistemas
+2. ✅ Brilho, efeitos e velocidade do LED (registrador `0xA0`)
+3. ✅ DPI (5 estágios, X/Y) e DPI Effect
+4. ✅ Remapeamento de botões e teclas de multimídia
+5. Polling rate — endereço ainda desconhecido
+6. Macros e combinações de teclas
+7. Empacotar (`.desktop` / PyInstaller) e portar a GUI pra outros sistemas
+
+## Créditos
+
+A engenharia reversa deste projeto é própria, feita por captura USB do software
+oficial. Duas descobertas vieram cruzadas com o
+[**m913-ctl**](https://github.com/Qehbr/m913-ctl) (GPL-3.0) e o
+[**mouse_m908**](https://github.com/dokutan/mouse_m908), que mapearam o **mesmo
+chip Compx** no Redragon M913 (USB IDs idênticos, `25a7:fa07`/`fa08`):
+
+- o layout de **16 entradas** da tabela de botões (tínhamos lido só 8);
+- o endereço do slot estendido, `0x0100 + 0x20 × índice`.
+
+A fórmula de DPI deste projeto foi validada de forma independente contra a
+tabela de códigos deles (5/5). O código aqui é escrito do zero a partir dos
+fatos do protocolo e validado contra este hardware — que, aliás, discorda deles
+em alguns pontos, todos anotados no [PROTOCOL.md](docs/PROTOCOL.md).
 
 ## Licença
 

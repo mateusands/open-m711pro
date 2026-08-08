@@ -153,6 +153,92 @@ def test_dpi_effect_preserva_os_campos_nao_decodificados():
     assert sum(pkt) % 256 == p.CHECKSUM_TARGET
 
 
+# --- Botões (0x0060-0x009F) -------------------------------------------------
+# Contrato: 16 registros de 4 bytes (TIPO P1 P2 cksum), escritos em oito pacotes
+# de LEN 8 (dois botões por pacote). Os oito pacotes abaixo são a captura do app
+# oficial gravando a configuração de fábrica deste mouse.
+# Ver docs/PROTOCOL.md, seção "Botões".
+
+TABELA_PADRAO = (
+    [p.btn_mouse(p.MOUSE_LEFT), p.btn_mouse(p.MOUSE_RIGHT),
+     p.btn_mouse(p.MOUSE_MIDDLE), p.btn_mouse(p.MOUSE_BACK),
+     p.btn_mouse(p.MOUSE_FORWARD), p.BTN_NONE, (0x09, 0x00, 0x00),
+     p.BTN_NONE, p.BTN_NONE, p.BTN_EXTENDED, p.BTN_EXTENDED, p.BTN_EXTENDED]
+    + [p.BTN_NONE] * 4)
+
+
+def test_tabela_de_botoes_bate_com_captura():
+    assert [x.hex() for x in p.build_buttons(TABELA_PADRAO)] == [
+        "0807000060080101005301020052000034",
+        "080700006808010400500108004c00002c",
+        "0807000070080110004400000055000024",
+        "0807000078080900004c0000005500001c",
+        "0807000080080000005505000050000014",
+        "080700008808050000500500005000000c",
+        "0807000090080000005500000055000004",
+        "08070000980800000055000000550000fc",
+    ]
+
+
+def test_acoes_batem_com_o_hardware():
+    # lidos do mouse depois de atribuir cada ação pelo app oficial
+    assert p.btn_fire(0x28, 3) == (0x04, 0x28, 0x03)
+    assert p.btn_three_click() == (0x04, 0x32, 0x03)
+    assert p.btn_rgb_toggle() == (0x07, 0x00, 0x00)
+    assert p.btn_polling_switch() == (0x08, 0x00, 0x00)
+    assert p.btn_dpi_up() == (0x02, 0x02, 0x00)
+    assert p.BTN_NONE == (0x00, 0x00, 0x00)
+    assert p.BTN_EXTENDED == (0x05, 0x00, 0x00)
+
+
+def test_bitmask_dos_botoes_de_mouse():
+    assert p.btn_mouse(p.MOUSE_LEFT) == (0x01, 0x01, 0x00)
+    assert p.btn_mouse(p.MOUSE_FORWARD) == (0x01, 0x10, 0x00)
+
+
+def test_cada_registro_de_botao_fecha_em_0x55():
+    for pkt in p.build_buttons([p.btn_fire(0x3A, 2)] * p.BUTTON_COUNT):
+        for i in range(6, 6 + pkt[5], 4):
+            assert sum(pkt[i:i+4]) % 256 == p.CHECKSUM_TARGET
+
+
+def test_build_buttons_exige_dezesseis_acoes():
+    try:
+        p.build_buttons(TABELA_PADRAO[:8])
+    except ValueError:
+        return
+    raise AssertionError("build_buttons deveria recusar uma tabela incompleta")
+
+
+# --- Slot estendido (multimídia) --------------------------------------------
+def test_endereco_do_slot_estendido():
+    # slot = 0x0100 + 0x20 * indice — os três do nosso mouse
+    assert p.ext_slot_addr(9) == 0x0220
+    assert p.ext_slot_addr(10) == 0x0240
+    assert p.ext_slot_addr(11) == 0x0260
+
+
+def test_multimidia_bate_com_captura():
+    assert p.build_media(9, p.MEDIA_PREVIOUS).hex() == \
+        "0807000220080282b60042b600230000c7"
+    assert p.build_media(10, p.MEDIA_PLAY_PAUSE).hex() == \
+        "0807000240080282cd0042cd00f50000a7"
+    assert p.build_media(11, p.MEDIA_NEXT).hex() == \
+        "0807000260080282b50042b50025000087"
+
+
+def test_multimidia_mute_bate_com_o_hardware():
+    # lido do mouse depois de atribuir "Mute" pelo app oficial
+    assert p.build_media(9, p.MEDIA_MUTE)[6:14].hex() == "0282e20042e200cb"
+
+
+def test_multimidia_aceita_usage_de_16_bits():
+    # "Home page" é o usage 0x0223 da HID Consumer Page — dois bytes, LE
+    pkt = p.build_media(9, 0x0223)
+    assert pkt[6:14].hex() == "0282230242230245"
+    assert sum(pkt) % 256 == p.CHECKSUM_TARGET
+
+
 # --- Leitura com endereço de 16 bits ----------------------------------------
 def test_read_usa_endereco_de_16_bits():
     # captura: o app varre a página 0x0100 com LEN 0x0a

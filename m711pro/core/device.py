@@ -14,7 +14,8 @@ from .protocol import (build_color, build_breathing, build_cycle, build_off,
                        build_commit, build_read, build_dpi_table_bytes,
                        build_dpi_effect, byte_to_dpi, dpi_to_byte,
                        SPEED_RESPIRACAO, SPEED_CICLO, DPI_ADDR, DPI_STAGES,
-                       DPI_EFFECT_ADDR)
+                       DPI_EFFECT_ADDR, build_buttons, build_media,
+                       BUTTON_ADDR, BUTTON_COUNT, BTN_EXTENDED)
 from . import state
 
 EFFECT_NAMES = {0x00: "Ciclo", 0x01: "Respiração", 0x02: "Fixo", 0x04: "Desligado"}
@@ -259,6 +260,61 @@ def send_dpi_all(dpi):
     """
     b = dpi_to_byte(dpi)
     return send_dpi_bytes([b] * DPI_STAGES), byte_to_dpi(b)
+
+
+def read_buttons():
+    """Lê os 16 registros de botão. Retorna [(TIPO,P1,P2), ...] ou None.
+
+    Devolve os bytes crus para que quem muda um botão possa reescrever os
+    outros quinze exatamente como estavam — inclusive tipos que ainda não
+    sabemos interpretar.
+    """
+    out = []
+    for i in range(0, BUTTON_COUNT, 2):
+        resp = read_register(BUTTON_ADDR + 4 * i, 8)
+        if not resp or len(resp) < 14:
+            return None
+        d = resp[6:14]
+        out.append(tuple(d[0:3]))
+        out.append(tuple(d[4:7]))
+    return out
+
+
+def send_buttons(actions):
+    """Escreve a tabela de botões inteira (16 ações)."""
+    return send_packets(build_buttons(actions))
+
+
+def _tabela_atual():
+    atual = read_buttons()
+    if atual is None:
+        raise DeviceNotFound(
+            "não consegui ler a tabela de botões — sem ela eu reescreveria os "
+            "outros botões com chute. Confira o dongle e tente de novo.")
+    return atual
+
+
+def send_button(index, action):
+    """Muda UM botão (índice 0–15) preservando os outros byte a byte."""
+    if not 0 <= index < BUTTON_COUNT:
+        raise ValueError(f"índice de botão deve estar entre 0 e {BUTTON_COUNT - 1}")
+    nova = _tabela_atual()
+    nova[index] = tuple(action)
+    return send_buttons(nova), nova
+
+
+def send_media(index, usage):
+    """Atribui uma tecla de multimídia ao botão `index`.
+
+    Grava o slot estendido primeiro e só então a tabela de botões, na mesma
+    ordem em que o app oficial faz.
+    """
+    if not 0 <= index < BUTTON_COUNT:
+        raise ValueError(f"índice de botão deve estar entre 0 e {BUTTON_COUNT - 1}")
+    nova = _tabela_atual()
+    nova[index] = BTN_EXTENDED
+    vias = send_packets([build_media(index, usage)] + build_buttons(nova))
+    return vias, nova
 
 
 def read_dpi_effect():

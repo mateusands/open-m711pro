@@ -23,7 +23,13 @@ def main():
         spec = importlib.util.spec_from_file_location(
             os.path.basename(path)[:-3], path)
         mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        try:
+            spec.loader.exec_module(mod)
+        except Exception:      # o módulo nem carregou (ex.: função ainda não existe)
+            falhas += 1
+            print(f"FAIL  {os.path.basename(path)} (não carregou)")
+            traceback.print_exc()
+            continue
         for name in sorted(dir(mod)):
             if not name.startswith('test_'):
                 continue
