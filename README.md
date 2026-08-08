@@ -29,7 +29,8 @@ protocol family are used by the Redragon M913 Impact Elite.
 - **Multimedia keys** — play/pause, next, previous, mute, stop, volume
 - **Reading the real state** back from the mouse, not just what this app wrote
 
-Not mapped yet: polling rate (address unknown), macros and keyboard combos.
+Not mapped yet: macros and keyboard combos, and a second LED zone at `0x0054`.
+The polling rate register is identified but not yet verified on this hardware.
 
 ## Requirements
 
@@ -131,12 +132,13 @@ interrupt IN as Report ID `09` with the same layout.
 
 | Address | Contents |
 |---------|----------|
-| `0x0000` | active DPI stage |
+| `0x0000` | USB polling rate: `01` 1000 Hz, `02` 500, `04` 250, `08` 125 (unverified here) |
 | `0x0002` | number of enabled DPI stages (5) |
 | `0x000C`–`0x001F` | DPI table: 5 stages × 4 bytes (`X Y 00 ck`) |
 | `0x002C`–`0x003F` | per-stage LED colour: 5 × 4 bytes (`R G B ck`) |
 | `0x004C` | DPI Effect: `01` steady, `00` off |
 | `0x0060`–`0x009F` | button table: 16 records × 4 bytes (`TYPE P1 P2 ck`) |
+| `0x0054`–`0x005F` | second LED zone (logo?) — not decoded |
 | `0x00A0` | LED: `EFFECT R G B SPEED BRIGHTNESS ck` |
 | `0x0100 + 0x20 × n` | extended slot for button *n* (multimedia, keyboard) |
 
