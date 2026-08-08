@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "open-m711pro"
+description = "Open-source driver and configuration tool for the Redragon M711 Pro gaming mouse on Linux"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Mateus Andrade" }]
+keywords = ["redragon", "m711", "compx", "mouse", "hidraw", "linux", "rgb", "dpi"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: System :: Hardware :: Hardware Drivers",
+    "Topic :: Utilities",
+]
+
+# The core (m711pro.core: protocol + device) is pure stdlib: zero dependencies.
+dependencies = []
+
+# Version lives in a single place: m711pro/__init__.py.
+dynamic = ["version"]
+
+[project.optional-dependencies]
+# The Qt interface. Without it the GUI falls back to tkinter, which ships with
+# Python, so this stays strictly optional.
+gui = ["PySide6>=6.5"]
+
+[project.urls]
+Homepage = "https://github.com/mateusands/open-m711pro"
+Repository = "https://github.com/mateusands/open-m711pro"
+Issues = "https://github.com/mateusands/open-m711pro/issues"
+
+[project.scripts]
+open-m711pro = "m711pro.cli:main"
+
+[project.gui-scripts]
+open-m711pro-gui = "m711pro.__main__:gui"
+
+[tool.setuptools.dynamic]
+version = { attr = "m711pro.__version__" }
+
+# Automatic discovery, scoped to the package: keeps the repo-root modules
+# (main.py, tools/, tests/) out of site-packages.
+[tool.setuptools.packages.find]
+include = ["m711pro*"]
+namespaces = false
