@@ -664,7 +664,7 @@ class DpiPage(QWidget):
             self.status.emit("DPI read from the mouse.", False)
 
     def _enable(self, flag):
-        for row in self.rows.values():
+        for row in self.rows:            # DpiPage keeps a list, one per stage
             row.setEnabled(flag)
         self.xy.setEnabled(flag)
         self.single.setEnabled(flag)
