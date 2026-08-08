@@ -1,8 +1,9 @@
-"""Comunicação com o mouse via hidraw (I/O). Sem dependências externas.
+"""Talking to the mouse over hidraw (I/O). No external dependencies.
 
-Descobre TODAS as interfaces de config presentes (dongle 2.4G `FA07` e/ou mouse
-`FA08`) e envia o comando para todas — a do modo ativo recebe. Reenvia algumas
-vezes para vencer o "sono" do mouse wireless.
+Finds EVERY configuration interface present (the 2.4G dongle `FA07` and/or the
+mouse itself `FA08`) and sends the command to all of them — whichever one is in
+the active mode will take it. Commands are repeated a few times to beat the
+wireless mouse's sleep.
 """
 import os
 import glob
@@ -13,24 +14,24 @@ import fcntl
 from .protocol import (build_color, build_breathing, build_cycle, build_off,
                        build_commit, build_read, build_dpi_table_bytes,
                        build_dpi_effect, byte_to_dpi, dpi_to_byte,
-                       SPEED_RESPIRACAO, SPEED_CICLO, DPI_ADDR, DPI_STAGES,
+                       SPEED_BREATHING, SPEED_CYCLE, DPI_ADDR, DPI_STAGES,
                        DPI_EFFECT_ADDR, build_buttons, build_media,
                        BUTTON_ADDR, BUTTON_COUNT, BTN_EXTENDED)
 from . import state
 
-EFFECT_NAMES = {0x00: "Ciclo", 0x01: "Respiração", 0x02: "Fixo", 0x04: "Desligado"}
+EFFECT_NAMES = {0x00: "Cycle", 0x01: "Breathing", 0x02: "Steady", 0x04: "Off"}
 LED_ADDR = 0xA0
 
 VID = 0x25A7
-PIDS = [0xFA07, 0xFA08]        # FA07 = receptor 2.4G ; FA08 = mouse (cabo/BT)
+PIDS = [0xFA07, 0xFA08]        # FA07 = 2.4G receiver ; FA08 = mouse (cable/BT)
 TARGET_INTERFACE = 1
 
-RETRIES = 4                    # o 1o comando às vezes só acorda o mouse
-RETRY_DELAY = 0.02            # segundos entre reenvios
+RETRIES = 4                    # the first command sometimes only wakes the mouse
+RETRY_DELAY = 0.02             # seconds between repeats
 
 
 class DeviceNotFound(Exception):
-    """Nenhuma interface de config acessível aceitou o comando."""
+    """No reachable configuration interface accepted the command."""
 
 
 def _IOC(direction, typ, nr, size):
@@ -42,7 +43,7 @@ def _HIDIOCSFEATURE(size):
 
 
 def find_devices():
-    """Lista as interfaces de config presentes: [(dev_path, pid), ...]."""
+    """List the configuration interfaces present: [(dev_path, pid), ...]."""
     found = []
     for pid in PIDS:
         for node in sorted(glob.glob('/sys/class/hidraw/hidraw*')):
@@ -53,17 +54,17 @@ def find_devices():
                 continue
             if f"{VID:08X}" not in uevent or f"{pid:08X}" not in uevent:
                 continue
-            p = os.path.realpath(os.path.join(node, 'device'))
+            path = os.path.realpath(os.path.join(node, 'device'))
             iface = None
             for _ in range(6):
-                bi = os.path.join(p, 'bInterfaceNumber')
-                if os.path.exists(bi):
+                candidate = os.path.join(path, 'bInterfaceNumber')
+                if os.path.exists(candidate):
                     try:
-                        iface = int(open(bi).read().strip(), 16)
+                        iface = int(open(candidate).read().strip(), 16)
                     except ValueError:
                         iface = None
                     break
-                p = os.path.dirname(p)
+                path = os.path.dirname(path)
             if iface == TARGET_INTERFACE:
                 found.append((f"/dev/{name}", pid))
     return found
@@ -77,92 +78,96 @@ def _send_feature(dev_path, data):
         os.close(fd)
 
 
-def _apply(dev_path, pkts):
-    """Envia cada pacote (com reenvio) e fecha com UM commit, como o app faz."""
-    for pkt in pkts:
+def _apply(dev_path, packets):
+    """Send every packet (with repeats) and close with ONE commit, as the app does."""
+    for packet in packets:
         for _ in range(RETRIES):
-            _send_feature(dev_path, pkt)
+            _send_feature(dev_path, packet)
             time.sleep(RETRY_DELAY)
     _send_feature(dev_path, build_commit())
 
 
 def _mode_label(pid):
-    return "2.4G" if pid == 0xFA07 else "cabo"
+    return "2.4G" if pid == 0xFA07 else "cable"
 
 
-def send_packets(pkts):
-    """Envia a sequência `pkts` a toda interface presente, com um commit no
-    final. Retorna as vias que aceitaram (ex.: ['2.4G', 'cabo']). Levanta
-    DeviceNotFound se nenhuma aceitou."""
+def send_packets(packets):
+    """Send `packets` to every interface present, with one commit at the end.
+
+    Returns the routes that accepted it (e.g. ['2.4G', 'cable']). Raises
+    DeviceNotFound when none did.
+    """
     devices = find_devices()
     if not devices:
         raise DeviceNotFound(
-            "mouse não encontrado — verifique o dongle/cabo, a regra udev "
-            "(0666) e se a VM não está com o mouse capturado")
-    ok = []
+            "mouse not found — check the dongle/cable, the udev rule (0666) "
+            "and whether a VM has grabbed the device")
+    accepted = []
     for dev, pid in devices:
         try:
-            _apply(dev, pkts)
-            ok.append(_mode_label(pid))
+            _apply(dev, packets)
+            accepted.append(_mode_label(pid))
         except OSError:
             pass
-    if not ok:
-        raise DeviceNotFound("nenhuma interface aceitou o comando")
-    return ok
+    if not accepted:
+        raise DeviceNotFound("no interface accepted the command")
+    return accepted
 
 
-def send_packet(pkt):
-    """Envia um pacote único (atalho para send_packets)."""
-    return send_packets([pkt])
+def send_packet(packet):
+    """Send a single packet (shortcut for send_packets)."""
+    return send_packets([packet])
 
 
 def send_color(r, g, b, brightness=0xFF):
-    vias = send_packet(build_color(r, g, b, brightness=brightness))
-    state.save({"effect": "Fixo", "rgb": [r, g, b], "brightness": brightness})
-    return vias
+    routes = send_packet(build_color(r, g, b, brightness=brightness))
+    state.save({"effect": "Steady", "rgb": [r, g, b], "brightness": brightness})
+    return routes
 
 
-def send_breathing(r, g, b, brightness=0xFF, speed=SPEED_RESPIRACAO):
-    vias = send_packet(build_breathing(r, g, b, brightness=brightness, speed=speed))
-    state.save({"effect": "Respiração", "rgb": [r, g, b], "brightness": brightness, "speed": speed})
-    return vias
+def send_breathing(r, g, b, brightness=0xFF, speed=SPEED_BREATHING):
+    routes = send_packet(build_breathing(r, g, b, brightness=brightness, speed=speed))
+    state.save({"effect": "Breathing", "rgb": [r, g, b],
+                "brightness": brightness, "speed": speed})
+    return routes
 
 
-def send_cycle(r, g, b, brightness=0xFF, speed=SPEED_CICLO):
-    vias = send_packet(build_cycle(r, g, b, brightness=brightness, speed=speed))
-    state.save({"effect": "Ciclo", "rgb": [r, g, b], "brightness": brightness, "speed": speed})
-    return vias
+def send_cycle(r, g, b, brightness=0xFF, speed=SPEED_CYCLE):
+    routes = send_packet(build_cycle(r, g, b, brightness=brightness, speed=speed))
+    state.save({"effect": "Cycle", "rgb": [r, g, b],
+                "brightness": brightness, "speed": speed})
+    return routes
 
 
 def send_off():
-    vias = send_packet(build_off())
-    st = state.load()
-    st["effect"] = "Desligado"
-    state.save(st)
-    return vias
+    routes = send_packet(build_off())
+    saved = state.load()
+    saved["effect"] = "Off"
+    state.save(saved)
+    return routes
 
 
-# --- Leitura do estado real do hardware (nível 2) ---------------------------
+# --- Reading the real hardware state ----------------------------------------
 def _read_from(dev_path, addr, length, timeout):
-    """Tenta ler `addr` por uma interface. Retorna o report 09 ou None."""
+    """Try to read `addr` through one interface. Returns the report 09 or None."""
     fd = os.open(dev_path, os.O_RDWR | os.O_NONBLOCK)
     try:
-        for _ in range(RETRIES):        # reenvia: o 1o às vezes só acorda o mouse
+        for _ in range(RETRIES):        # repeat: the first one often just wakes it
             fcntl.ioctl(fd, _HIDIOCSFEATURE(17), bytearray(build_read(addr, length)))
             time.sleep(RETRY_DELAY)
         end = time.monotonic() + timeout
         while True:
-            rem = end - time.monotonic()
-            if rem <= 0:
+            remaining = end - time.monotonic()
+            if remaining <= 0:
                 return None
-            if not select.select([fd], [], [], rem)[0]:
+            if not select.select([fd], [], [], remaining)[0]:
                 return None
             try:
                 data = os.read(fd, 64)
             except (BlockingIOError, OSError):
                 continue
-            # confere os DOIS bytes de endereço: só o baixo deixaria uma
-            # resposta da página 0 passar por outra página
+            # check BOTH address bytes: matching only the low one would let a
+            # reply from page 0 pass as a reply from another page
             if (len(data) >= 12 and data[0] == 0x09 and data[1] == 0x08
                     and data[3] == ((addr >> 8) & 0xFF)
                     and data[4] == (addr & 0xFF)):
@@ -172,190 +177,195 @@ def _read_from(dev_path, addr, length, timeout):
 
 
 def read_register(addr, length=8, timeout=0.6):
-    """Envia a requisição de leitura e captura o response (interrupt IN, Report
-    ID 09). Retorna os bytes do report ou None se nenhuma interface respondeu.
+    """Send the read request and capture the reply (interrupt IN, Report ID 09).
 
-    Tenta TODAS as interfaces presentes: com dongle e cabo ligados ao mesmo
-    tempo, quem responde é o nó do mouse (FA08), não necessariamente o primeiro
-    da lista — fixar `devices[0]` fazia a leitura falhar em silêncio.
+    Returns the report bytes, or None when no interface answered.
+
+    Tries EVERY interface present: with the dongle and the cable connected at
+    the same time it is the mouse node (FA08) that answers, not necessarily the
+    first in the list — pinning `devices[0]` made reads fail silently.
     """
     devices = find_devices()
     if not devices:
-        raise DeviceNotFound("mouse não encontrado")
+        raise DeviceNotFound("mouse not found")
     for dev, _ in devices:
         try:
-            resp = _read_from(dev, addr, length, timeout)
+            reply = _read_from(dev, addr, length, timeout)
         except OSError:
             continue
-        if resp:
-            return resp
+        if reply:
+            return reply
     return None
 
 
 def read_dpi_bytes():
-    """Lê os BYTES crus dos 5 estágios de DPI. Retorna [b1..b5] ou None.
+    """Read the RAW bytes of the five DPI stages. Returns [b1..b5] or None.
 
-    Três leituras nas mesmas formas que o app usa para escrever: 0x0C (LEN 8,
-    estágios 1–2), 0x14 (LEN 8, estágios 3–4) e 0x1C (LEN 4, estágio 5).
+    Three reads in the same shapes the app uses to write: 0x0C (LEN 8, stages
+    1-2), 0x14 (LEN 8, stages 3-4) and 0x1C (LEN 4, stage 5).
 
-    Devolve BYTES, não DPI, de propósito: quem só quer mudar um estágio precisa
-    reescrever os outros quatro **exatamente** como estavam, e a conversão
-    byte -> DPI -> byte não é identidade acima de 0xBD.
+    It returns BYTES rather than DPI on purpose: changing one stage means
+    rewriting the other four EXACTLY as they were, and byte -> DPI -> byte is
+    not the identity above 0xBD.
     """
     out = []
-    for addr, ln in ((DPI_ADDR, 8), (DPI_ADDR + 8, 8), (DPI_ADDR + 16, 4)):
-        resp = read_register(addr, ln)
-        if not resp or len(resp) < 6 + ln:
+    for addr, length in ((DPI_ADDR, 8), (DPI_ADDR + 8, 8), (DPI_ADDR + 16, 4)):
+        reply = read_register(addr, length)
+        if not reply or len(reply) < 6 + length:
             return None
-        data = resp[6:6 + ln]
-        out += [data[i] for i in range(0, ln, 4)]
+        data = reply[6:6 + length]
+        out += [data[i] for i in range(0, length, 4)]
     return out
 
 
 def read_dpi_table():
-    """Lê os 5 estágios de DPI do hardware, em DPI. Retorna lista ou None."""
+    """Read the five DPI stages from the hardware, in DPI. Returns a list or None."""
     raw = read_dpi_bytes()
     return None if raw is None else [byte_to_dpi(b) for b in raw]
 
 
 def send_dpi_bytes(values):
-    """Escreve os 5 estágios a partir dos bytes crus do registrador."""
-    vias = send_packets(build_dpi_table_bytes(values))
+    """Write the five stages from the raw register bytes."""
+    routes = send_packets(build_dpi_table_bytes(values))
     state.save({**state.load(), "dpi_stages": [byte_to_dpi(b) for b in values]})
-    return vias
+    return routes
 
 
 def send_dpi_table(stages):
-    """Escreve os 5 estágios de uma vez, a partir de valores em DPI."""
+    """Write all five stages at once, from values in DPI."""
     return send_dpi_bytes([dpi_to_byte(d) for d in stages])
 
 
 def send_dpi(stage, dpi):
-    """Muda UM estágio (1 a 5) preservando os outros byte a byte.
+    """Change ONE stage (1 to 5), preserving the others byte for byte.
 
-    A tabela é escrita inteira pelo protocolo, então lemos a atual antes. Se a
-    leitura falhar, abortamos: reescrever os outros quatro estágios com valor
-    chutado é justamente o que a regra de ouro do repo proíbe.
+    The protocol writes the whole table, so the current one is read first. If
+    that read fails we abort: rewriting the other four stages with a guessed
+    value is exactly what the project's rule forbids.
 
-    Retorna (vias, tabela_em_dpi) — a tabela **resultante**, já quantizada pelo
-    passo do hardware, e não o que foi pedido.
+    Returns (routes, table_in_dpi) — the RESULTING table, already quantised by
+    the hardware step, not what was asked for.
     """
     if not 1 <= stage <= DPI_STAGES:
-        raise ValueError(f"estágio deve estar entre 1 e {DPI_STAGES}")
+        raise ValueError(f"stage must be between 1 and {DPI_STAGES}")
     raw = read_dpi_bytes()
     if raw is None:
         raise DeviceNotFound(
-            "não consegui ler a tabela de DPI atual — sem ela eu reescreveria "
-            "os outros estágios com chute. Confira o dongle e tente de novo.")
+            "could not read the current DPI table — without it the other "
+            "stages would be rewritten with a guess. Check the dongle and "
+            "try again.")
     raw[stage - 1] = dpi_to_byte(dpi)
-    vias = send_dpi_bytes(raw)
-    return vias, [byte_to_dpi(b) for b in raw]
+    routes = send_dpi_bytes(raw)
+    return routes, [byte_to_dpi(b) for b in raw]
 
 
 def send_dpi_all(dpi):
-    """Aplica o MESMO DPI aos 5 estágios — o mouse passa a ter um DPI só.
+    """Apply the SAME DPI to all five stages — the mouse ends up with one DPI.
 
-    Com todos os estágios iguais, o botão de DPI do mouse continua ciclando mas
-    não muda mais a sensibilidade. Retorna (vias, dpi_resultante).
+    With every stage equal, the mouse's DPI button still cycles but no longer
+    changes the sensitivity. Returns (routes, resulting_dpi).
     """
-    b = dpi_to_byte(dpi)
-    return send_dpi_bytes([b] * DPI_STAGES), byte_to_dpi(b)
+    byte = dpi_to_byte(dpi)
+    return send_dpi_bytes([byte] * DPI_STAGES), byte_to_dpi(byte)
 
 
 def read_buttons():
-    """Lê os 16 registros de botão. Retorna [(TIPO,P1,P2), ...] ou None.
+    """Read the 16 button records. Returns [(TYPE, P1, P2), ...] or None.
 
-    Devolve os bytes crus para que quem muda um botão possa reescrever os
-    outros quinze exatamente como estavam — inclusive tipos que ainda não
-    sabemos interpretar.
+    It hands back the raw bytes so that changing one button can rewrite the
+    other fifteen exactly as they were — including action types we cannot
+    interpret yet.
     """
     out = []
     for i in range(0, BUTTON_COUNT, 2):
-        resp = read_register(BUTTON_ADDR + 4 * i, 8)
-        if not resp or len(resp) < 14:
+        reply = read_register(BUTTON_ADDR + 4 * i, 8)
+        if not reply or len(reply) < 14:
             return None
-        d = resp[6:14]
-        out.append(tuple(d[0:3]))
-        out.append(tuple(d[4:7]))
+        data = reply[6:14]
+        out.append(tuple(data[0:3]))
+        out.append(tuple(data[4:7]))
     return out
 
 
 def send_buttons(actions):
-    """Escreve a tabela de botões inteira (16 ações)."""
+    """Write the whole button table (16 actions)."""
     return send_packets(build_buttons(actions))
 
 
-def _tabela_atual():
-    atual = read_buttons()
-    if atual is None:
+def _current_button_table():
+    current = read_buttons()
+    if current is None:
         raise DeviceNotFound(
-            "não consegui ler a tabela de botões — sem ela eu reescreveria os "
-            "outros botões com chute. Confira o dongle e tente de novo.")
-    return atual
+            "could not read the button table — without it the other buttons "
+            "would be rewritten with a guess. Check the dongle and try again.")
+    return current
 
 
 def send_button(index, action):
-    """Muda UM botão (índice 0–15) preservando os outros byte a byte."""
+    """Change ONE button (index 0-15), preserving the others byte for byte."""
     if not 0 <= index < BUTTON_COUNT:
-        raise ValueError(f"índice de botão deve estar entre 0 e {BUTTON_COUNT - 1}")
-    nova = _tabela_atual()
-    nova[index] = tuple(action)
-    return send_buttons(nova), nova
+        raise ValueError(f"button index must be between 0 and {BUTTON_COUNT - 1}")
+    table = _current_button_table()
+    table[index] = tuple(action)
+    return send_buttons(table), table
 
 
 def send_media(index, usage):
-    """Atribui uma tecla de multimídia ao botão `index`.
+    """Assign a multimedia key to button `index`.
 
-    Grava o slot estendido primeiro e só então a tabela de botões, na mesma
-    ordem em que o app oficial faz.
+    Writes the extended slot first and only then the button table, in the same
+    order the official app uses.
     """
     if not 0 <= index < BUTTON_COUNT:
-        raise ValueError(f"índice de botão deve estar entre 0 e {BUTTON_COUNT - 1}")
-    nova = _tabela_atual()
-    nova[index] = BTN_EXTENDED
-    vias = send_packets([build_media(index, usage)] + build_buttons(nova))
-    return vias, nova
+        raise ValueError(f"button index must be between 0 and {BUTTON_COUNT - 1}")
+    table = _current_button_table()
+    table[index] = BTN_EXTENDED
+    routes = send_packets([build_media(index, usage)] + build_buttons(table))
+    return routes, table
 
 
 def read_dpi_effect():
-    """Lê o grupo do DPI Effect. Retorna (ligado, (b_0x4E, b_0x50)) ou None."""
-    resp = read_register(DPI_EFFECT_ADDR, 6)
-    if not resp or len(resp) < 12:
+    """Read the DPI Effect group. Returns (on, (byte_0x4E, byte_0x50)) or None."""
+    reply = read_register(DPI_EFFECT_ADDR, 6)
+    if not reply or len(reply) < 12:
         return None
-    d = resp[6:12]                      # 0x4C ck | 0x4E ck | 0x50 ck
-    return bool(d[0]), (d[2], d[4])
+    data = reply[6:12]                  # 0x4C ck | 0x4E ck | 0x50 ck
+    return bool(data[0]), (data[2], data[4])
 
 
 def send_dpi_effect(on):
-    """Liga (Steady) ou desliga o LED indicador de nível de DPI.
+    """Turn the DPI stage indicator LED on (Steady) or off.
 
-    Ao ligar, lê antes os campos 0x4E/0x50 — ainda não decodificados — e os
-    devolve intactos, em vez de sobrescrevê-los com os valores da captura.
+    When turning it on, the still-undecoded 0x4E/0x50 fields are read first and
+    handed back untouched instead of being overwritten with captured values.
     """
     if on:
-        atual = read_dpi_effect()
-        if atual is None:
+        current = read_dpi_effect()
+        if current is None:
             raise DeviceNotFound(
-                "não consegui ler o estado do DPI Effect — sem ele eu "
-                "sobrescreveria os campos 0x4E/0x50, que ainda não foram "
-                "decodificados. Confira o dongle e tente de novo.")
-        pkt = build_dpi_effect(True, tail=atual[1])
+                "could not read the DPI Effect state — without it the "
+                "0x4E/0x50 fields, which are still undecoded, would be "
+                "overwritten. Check the dongle and try again.")
+        packet = build_dpi_effect(True, tail=current[1])
     else:
-        pkt = build_dpi_effect(False)
-    vias = send_packets([pkt])
+        packet = build_dpi_effect(False)
+    routes = send_packets([packet])
     state.save({**state.load(), "dpi_effect": bool(on)})
-    return vias
+    return routes
 
 
 def read_led_state():
-    """Lê o estado atual do LED direto do mouse. Retorna dict (mesmo formato do
-    state persistido) ou None se a leitura falhar."""
+    """Read the LED state straight from the mouse.
+
+    Returns a dict in the same shape as the persisted state, or None when the
+    read fails.
+    """
     try:
-        resp = read_register(LED_ADDR, 8)
+        reply = read_register(LED_ADDR, 8)
     except (DeviceNotFound, OSError):
         return None
-    if not resp or len(resp) < 12:
+    if not reply or len(reply) < 12:
         return None
-    effect = EFFECT_NAMES.get(resp[6], "Fixo")
-    return {"effect": effect, "rgb": [resp[7], resp[8], resp[9]],
-            "speed": resp[10], "brightness": resp[11]}
+    effect = EFFECT_NAMES.get(reply[6], "Steady")
+    return {"effect": effect, "rgb": [reply[7], reply[8], reply[9]],
+            "speed": reply[10], "brightness": reply[11]}

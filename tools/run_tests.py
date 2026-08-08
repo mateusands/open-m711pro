@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Roda tests/ sem pytest (útil quando o pytest não está instalado).
+"""Run tests/ without pytest (handy when pytest is not installed).
 
-O runner oficial do repo continua sendo o pytest (ver pytest.ini e
-requirements-dev.txt); este é só um atalho de emergência com a mesma semântica
-básica: coleta `test_*` de cada `tests/test_*.py` e reporta falhas.
+The project's official runner is still pytest (see pytest.ini and
+requirements-dev.txt); this is an emergency shortcut with the same basic
+semantics: collect every `test_*` from each `tests/test_*.py` and report failures.
 
-Uso: python3 tools/run_tests.py
+Usage: python3 tools/run_tests.py
 """
 import sys
 import os
@@ -18,31 +18,31 @@ sys.path.insert(0, ROOT)
 
 
 def main():
-    ok = falhas = 0
+    passed = failed = 0
     for path in sorted(glob.glob(os.path.join(ROOT, 'tests', 'test_*.py'))):
         spec = importlib.util.spec_from_file_location(
             os.path.basename(path)[:-3], path)
-        mod = importlib.util.module_from_spec(spec)
+        module = importlib.util.module_from_spec(spec)
         try:
-            spec.loader.exec_module(mod)
-        except Exception:      # o módulo nem carregou (ex.: função ainda não existe)
-            falhas += 1
-            print(f"FAIL  {os.path.basename(path)} (não carregou)")
+            spec.loader.exec_module(module)
+        except Exception:      # the module did not even import
+            failed += 1
+            print(f"FAIL  {os.path.basename(path)} (did not load)")
             traceback.print_exc()
             continue
-        for name in sorted(dir(mod)):
+        for name in sorted(dir(module)):
             if not name.startswith('test_'):
                 continue
             try:
-                getattr(mod, name)()
-                ok += 1
+                getattr(module, name)()
+                passed += 1
                 print(f"PASS  {name}")
             except Exception:
-                falhas += 1
+                failed += 1
                 print(f"FAIL  {name}")
                 traceback.print_exc()
-    print(f"\n{ok} passaram, {falhas} falharam")
-    return 1 if falhas else 0
+    print(f"\n{passed} passed, {failed} failed")
+    return 1 if failed else 0
 
 
 if __name__ == '__main__':

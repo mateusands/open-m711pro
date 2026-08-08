@@ -1,9 +1,8 @@
-"""Persistência do último estado definido pelo app (nível 1 de "estado atual").
+"""Persistence of the last state this app applied.
 
-Guarda o que ESTE app aplicou por último (efeito + cor), para reabrir refletindo
-o estado real quando o app foi a última coisa a mexer no mouse. Ler o estado
-direto do hardware (nível 2) depende de engenharia reversa da leitura — ver
-docs/PROTOCOL.md / docs/mapeamento-roteiro.md.
+Stores what THIS app set last (effect + colour) so it can reopen reflecting the
+real state when it was the last thing to touch the mouse. Reading the state
+straight from the hardware is implemented in device.read_led_state().
 """
 import os
 import json
@@ -15,20 +14,20 @@ def _path():
 
 
 def load():
-    """Retorna o estado salvo como dict (vazio se não houver / erro)."""
+    """Return the saved state as a dict (empty on missing file or error)."""
     try:
-        with open(_path()) as f:
-            return json.load(f)
+        with open(_path()) as handle:
+            return json.load(handle)
     except (OSError, ValueError):
         return {}
 
 
 def save(state):
-    """Persiste `state` (dict). Silencioso em caso de erro de escrita."""
-    p = _path()
+    """Persist `state` (a dict). Silent on write errors."""
+    path = _path()
     try:
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        with open(p, "w") as f:
-            json.dump(state, f)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as handle:
+            json.dump(state, handle)
     except OSError:
         pass
