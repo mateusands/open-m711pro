@@ -180,14 +180,18 @@ def test_too_many_dpi_arguments_show_the_usage():
     with stubbed(send_dpi=Recorder(), send_dpi_all=Recorder()):
         _, message = run(["dpi", "1", "2", "3"])
 
-    assert message.startswith("Usage: main.py dpi")
+    assert message.startswith("Usage: " + commands.PROG + " dpi")
 
 
 def test_no_arguments_shows_the_usage():
     with stubbed():
         _, message = run([])
 
-    assert message == commands.__doc__
+    # USAGE is the docstring with the program name substituted for however the
+    # tool was actually invoked, so the help never points at a command the user
+    # does not have.
+    assert message == commands.USAGE
+    assert commands.PROG in message
 
 
 # --- dpi: the three forms dispatch to three different calls -----------------
@@ -332,7 +336,7 @@ def test_dpi_effect_needs_on_or_off():
     with stubbed(send_dpi_effect=send_dpi_effect):
         _, message = run(["dpi-effect", "maybe"])
 
-    assert message.startswith("Usage: main.py dpi-effect")
+    assert message.startswith("Usage: " + commands.PROG + " dpi-effect")
     assert send_dpi_effect.calls == []
 
 
