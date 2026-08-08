@@ -1,3 +1,4 @@
-# O núcleo (m711pro.core: protocolo + device) é Python stdlib puro, sem deps.
-# A interface gráfica usa PySide6 (Qt). Sem ela, a GUI cai no tkinter (stdlib).
+# The core (m711pro.core: protocol + device) is pure Python stdlib, no deps.
+# The graphical interface uses PySide6 (Qt). Without it the GUI falls back to
+# tkinter, which ships with Python.
 PySide6>=6.5

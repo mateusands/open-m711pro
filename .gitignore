@@ -1,6 +1,13 @@
-# Capturas USB (grandes; não versionar)
+# USB captures (large; never versioned)
 *.pcap
 *.pcapng
+
+# Reverse-engineering notes and protocol docs (kept locally, not published)
+docs/
+
+# AI assistant configuration (kept locally, not published)
+.claude/
+CLAUDE.md
 
 # Python
 __pycache__/
@@ -9,10 +16,9 @@ __pycache__/
 .venv/
 venv/
 
-# Editor / SO
+# Editor / OS
 .vscode/
 .idea/
 *.swp
 .DS_Store
 .pytest_cache/
-.venv/

@@ -1,3 +1,3 @@
-"""open-m711pro — driver aberto do mouse Redragon M711 Pro (chip Compx)."""
+"""open-m711pro — open driver for the Redragon M711 Pro mouse (Compx chip)."""
 
 __version__ = "0.1.0"

@@ -1,7 +1,8 @@
-"""Cores nomeadas (para a CLI) e a paleta de swatches (para a GUI)."""
+"""Named colours (for the CLI) and the swatch palette (for the GUI)."""
 import colorsys
 
-# Cores por nome — usadas na CLI (PT e EN).
+# Colours by name, used by the CLI. Portuguese aliases are kept so the
+# original commands keep working.
 NAMED = {
     'red': (255, 0, 0), 'vermelho': (255, 0, 0),
     'green': (0, 255, 0), 'verde': (0, 255, 0),
@@ -21,19 +22,19 @@ def _hsv(h, s, v):
 
 
 def palette(hues=16):
-    """Grade de cores estilo editor de imagem: linhas de tons de cinza + matizes
-    em vários brilhos/saturações. Retorna lista de linhas; cada linha é uma lista
-    de tuplas (r, g, b)."""
+    """An image-editor style grid: a greyscale row plus hue rows at several
+    brightness and saturation levels. Returns a list of rows, each row a list of
+    (r, g, b) tuples."""
     rows = []
 
-    # Linha 1 — escala de cinza (preto -> branco)
+    # Row 1 — greyscale (black -> white)
     rows.append([_hsv(0, 0, i / (hues - 1)) for i in range(hues)])
 
-    # Linhas de matiz cheias, variando o brilho
+    # Full-saturation hue rows at decreasing brightness
     for v in (1.0, 0.75, 0.5):
         rows.append([_hsv(i / hues, 1.0, v) for i in range(hues)])
 
-    # Linha pastel (saturação baixa)
+    # Pastel row (low saturation)
     rows.append([_hsv(i / hues, 0.4, 1.0) for i in range(hues)])
 
     return rows

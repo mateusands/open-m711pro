@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
-"""Dump da memória de configuração do mouse — SOMENTE LEITURA.
+"""Dump the mouse configuration memory — READ ONLY.
 
-Varre o espaço de endereços com a requisição de leitura já validada
-(`protocol.build_read`, opcode 0x08) e imprime o que o mouse responde.
-Nenhum byte de ESCRITA é enviado: o opcode 0x07 (escrever) e o 0x04 (commit)
-não são usados aqui, então o dump não altera estado do hardware.
+Sweeps the address space with the already validated read request
+(`protocol.build_read`, opcode 0x08) and prints whatever the mouse answers.
+No WRITE byte is ever sent: opcode 0x07 (write) and 0x04 (commit) are not used
+here, so the dump cannot change hardware state.
 
-Endereços são de 16 bits e aceitos em hex (sem 0x): a config principal vive em
-0x0000–0x00A8, mas o app oficial varre até 0x1981.
+Addresses are 16-bit and given in hex (without 0x): the main configuration lives
+at 0x0000-0x00A8, but the official app scans as far as 0x1981.
 
-Uso:
-    python3 tools/dump_config.py                    # varre 0x0000..0x00F8
-    python3 tools/dump_config.py > /tmp/dpi-800.txt
-    python3 tools/dump_config.py --addr 0C          # lê um endereço só
-    python3 tools/dump_config.py --start 0100 --end 01F8   # página 1
+Usage:
+    python3 tools/dump_config.py                    # sweep 0x0000..0x00F8
+    python3 tools/dump_config.py > /tmp/before.txt
+    python3 tools/dump_config.py --addr 0C          # read a single address
+    python3 tools/dump_config.py --start 0100 --end 01F8   # page 1
 
-Fluxo de descoberta (ver docs/roteiro-dpi.md):
-    1. app na VM: DPI = 800   → solta o mouse pro host → dump > /tmp/dpi-800.txt
-    2. app na VM: DPI = 1600  → solta o mouse pro host → dump > /tmp/dpi-1600.txt
-    3. diff -u /tmp/dpi-800.txt /tmp/dpi-1600.txt
+Discovery workflow: change one setting, dump again, and diff the two files.
+That is how the DPI encoding was mapped without touching a packet capture.
 """
 import sys
 import os
@@ -29,14 +27,14 @@ from m711pro.core import device  # noqa: E402
 
 
 def dump(addr, length=8):
-    """Retorna (bytes_de_dados, report_cru) ou (None, None) se não respondeu."""
+    """Return (data_bytes, raw_report), or (None, None) when nothing answered."""
     try:
-        resp = device.read_register(addr, length)
-    except (device.DeviceNotFound, OSError) as e:
-        raise SystemExit(f"Erro: {e}")
-    if not resp:
+        reply = device.read_register(addr, length)
+    except (device.DeviceNotFound, OSError) as exc:
+        raise SystemExit(f"Error: {exc}")
+    if not reply:
         return None, None
-    return resp[6:6 + length], resp
+    return reply[6:6 + length], reply
 
 
 def fmt(data):
@@ -46,19 +44,19 @@ def fmt(data):
 def main(argv):
     start, end, step, length = 0x0000, 0x00F8, 0x08, 0x08
     only = None
-    width = 2               # dígitos hex no rótulo de endereço
+    width = 2               # hex digits in the address label
     i = 0
     while i < len(argv):
-        a = argv[i]
-        if a == '--addr':
+        arg = argv[i]
+        if arg == '--addr':
             only = int(argv[i + 1], 16); i += 2
-        elif a == '--start':
+        elif arg == '--start':
             start = int(argv[i + 1], 16); i += 2
-        elif a == '--end':
+        elif arg == '--end':
             end = int(argv[i + 1], 16); i += 2
-        elif a == '--step':
+        elif arg == '--step':
             step = int(argv[i + 1], 0); i += 2
-        elif a == '--len':
+        elif arg == '--len':
             length = int(argv[i + 1], 0); i += 2
         else:
             raise SystemExit(__doc__)
@@ -68,19 +66,19 @@ def main(argv):
         width = 4
     if not device.find_devices():
         raise SystemExit(
-            "mouse não encontrado — o dongle está no host (não na VM)? "
-            "confira a regra udev e o modo 2.4G.")
+            "mouse not found — is the dongle on the host (not in a VM)? "
+            "check the udev rule and that the mouse is in 2.4G mode.")
 
     quiet = 0
     for addr in addrs:
         data, _ = dump(addr, length)
         if data is None:
-            print(f"{addr:0{width}X}: <sem resposta>")
+            print(f"{addr:0{width}X}: <no answer>")
             quiet += 1
             continue
         print(f"{addr:0{width}X}: {fmt(data)}")
     if quiet:
-        print(f"# {quiet} endereço(s) sem resposta", file=sys.stderr)
+        print(f"# {quiet} address(es) did not answer", file=sys.stderr)
 
 
 if __name__ == '__main__':

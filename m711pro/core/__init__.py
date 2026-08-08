@@ -1,1 +1,1 @@
-"""Núcleo: protocolo (lógica pura) e device (I/O via hidraw)."""
+"""Core: protocol (pure logic) and device (hidraw I/O)."""

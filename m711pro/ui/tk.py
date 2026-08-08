@@ -1,15 +1,15 @@
-"""Interface gráfica do open-m711pro (tkinter, sem dependências externas).
+"""open-m711pro graphical interface (tkinter, no external dependencies).
 
-Inspirada no Logitech G HUB: barra lateral com seções, roda de cores HSV,
-efeitos de iluminação e uma seção de Sensibilidade (DPI). A parte de DPI já vem
-montada na UI, mesmo o protocolo ainda não estando mapeado.
+Inspired by Logitech G HUB: a sidebar, an HSV colour wheel and the lighting
+effects. This is the fallback used when PySide6 is not installed; the Qt
+interface (m711pro.ui.qt) is the full one.
 """
 import math
 import colorsys
 import tkinter as tk
 from tkinter import ttk, colorchooser
 
-from .core import device
+from ..core import device
 from . import theme as T
 
 
@@ -99,11 +99,11 @@ class ColorWheel(tk.Canvas):
 
 
 # ---------------------------------------------------------------------------
-# Aplicação
+# Application
 # ---------------------------------------------------------------------------
-EFEITOS = ["Fixo", "Desligado", "Ciclo (em breve)", "Respiração (em breve)",
-           "Visualizador de áudio (em breve)"]
-DPI_STAGES = [800, 1600, 2400, 3200]
+EFFECTS = ["Steady", "Off", "Cycle (coming soon)", "Breathing (coming soon)",
+           "Audio visualiser (coming soon)"]
+DPI_STAGES = [800, 1600, 2400, 3200]   # placeholder for the informational panel
 POLLING = [1000, 500, 250, 125]
 
 
@@ -134,8 +134,8 @@ class App:
     # ---- layout ------------------------------------------------------------
     def _build(self):
         # Barra de status PRIMEIRO (reserva a faixa inferior de largura total,
-        # senão a sidebar/conteúdo a espremem e o texto é cortado).
-        self.status = tk.Label(self.root, text="Pronto.", bg=T.PANEL, fg=T.MUTED,
+        # otherwise the sidebar/content squeeze it and the text gets clipped).
+        self.status = tk.Label(self.root, text="Ready.", bg=T.PANEL, fg=T.MUTED,
                                anchor="w", padx=12, pady=7)
         self.status.pack(side="bottom", fill="x")
 
@@ -149,8 +149,8 @@ class App:
                  font=(T.FONT, 8)).pack(anchor="w", padx=18, pady=(0, 18))
 
         self.nav = {}
-        self._nav_item("light", "  Iluminação")
-        self._nav_item("dpi", "  Sensibilidade (DPI)")
+        self._nav_item("light", "  Lighting")
+        self._nav_item("dpi", "  Sensitivity (DPI)")
 
         self.content = tk.Frame(self.root, bg=T.BG)
         self.content.pack(side="left", fill="both", expand=True)
@@ -174,18 +174,18 @@ class App:
             b.config(fg=T.ACCENT if active else T.MUTED,
                      bg=T.PANEL_HI if active else T.SIDEBAR)
 
-    # ---- página: Iluminação ------------------------------------------------
+    # ---- page: Lighting ------------------------------------------------
     def _page_light(self):
         p = tk.Frame(self.content, bg=T.BG)
-        tk.Label(p, text="ILUMINAÇÃO", bg=T.BG, fg=T.FG,
+        tk.Label(p, text="LIGHTING", bg=T.BG, fg=T.FG,
                  font=(T.FONT, 16, "bold")).pack(anchor="w")
 
         # efeito
         row = tk.Frame(p, bg=T.BG); row.pack(anchor="w", pady=(14, 8))
         tk.Label(row, text="EFEITO", bg=T.BG, fg=T.MUTED,
                  font=(T.FONT, 9)).pack(side="left")
-        self.effect = ttk.Combobox(row, values=EFEITOS, state="readonly", width=28)
-        self.effect.set("Fixo")
+        self.effect = ttk.Combobox(row, values=EFFECTS, state="readonly", width=28)
+        self.effect.set("Steady")
         self.effect.pack(side="left", padx=10)
         self.effect.bind("<<ComboboxSelected>>", self._on_effect)
 
@@ -196,7 +196,7 @@ class App:
                                 on_commit=self._commit_hs)
         self.wheel.pack(side="left")
 
-        # controles à direita
+        # controls on the right
         right = tk.Frame(self.body, bg=T.BG); right.pack(side="left", padx=20, anchor="n")
 
         self.preview = tk.Frame(right, width=54, height=54, bg="#000000",
@@ -214,7 +214,7 @@ class App:
         self.bright.pack(anchor="w")
         self.bright.bind("<ButtonRelease-1>", lambda e: self._commit_current())
 
-        # presets rápidos
+        # quick presets
         presets = tk.Frame(right, bg=T.BG); presets.pack(anchor="w", pady=12)
         for (r, g, b) in [(255, 0, 0), (255, 128, 0), (255, 255, 0), (0, 255, 0),
                           (0, 255, 255), (0, 0, 255), (180, 0, 255), (255, 255, 255)]:
@@ -229,13 +229,13 @@ class App:
                    command=self._pick_custom).pack(anchor="w", pady=(4, 0))
         return p
 
-    # ---- página: Sensibilidade (DPI) — mockup ------------------------------
+    # ---- page: Sensitivity (DPI) — informational only ------------------------------
     def _page_dpi(self):
         p = tk.Frame(self.content, bg=T.BG)
-        tk.Label(p, text="SENSIBILIDADE (DPI)", bg=T.BG, fg=T.FG,
+        tk.Label(p, text="SENSITIVITY (DPI)", bg=T.BG, fg=T.FG,
                  font=(T.FONT, 16, "bold")).pack(anchor="w")
-        tk.Label(p, text="🚧 Ainda não mapeado — interface pronta, protocolo em "
-                 "breve (mapear com a skill captura).", bg=T.BG, fg=T.ACCENT,
+        tk.Label(p, text="Configure DPI from the Qt interface or the command line; "
+                 "this fallback UI only covers lighting.", bg=T.BG, fg=T.ACCENT,
                  wraplength=440, justify="left").pack(anchor="w", pady=(6, 16))
 
         tk.Label(p, text="VELOCIDADES DE DPI", bg=T.BG, fg=T.MUTED,
@@ -252,7 +252,7 @@ class App:
                  bg=T.BG, fg=T.DISABLED, troughcolor=T.PANEL, highlightthickness=0,
                  state="disabled").pack(anchor="w", pady=14)
 
-        tk.Label(p, text="TAXA DE RELATÓRIO (Hz)", bg=T.BG, fg=T.MUTED,
+        tk.Label(p, text="POLLING RATE (Hz)", bg=T.BG, fg=T.MUTED,
                  font=(T.FONT, 9)).pack(anchor="w")
         pol = tk.Frame(p, bg=T.BG); pol.pack(anchor="w", pady=8)
         for hz in POLLING:
@@ -262,7 +262,7 @@ class App:
                      side="left", padx=3)
         return p
 
-    # ---- lógica de cor -----------------------------------------------------
+    # ---- colour logic -----------------------------------------------------
     def _rgb_from_state(self):
         r, g, b = colorsys.hsv_to_rgb(self.hue, self.sat, self.brightness)
         return int(round(r * 255)), int(round(g * 255)), int(round(b * 255))
@@ -294,20 +294,20 @@ class App:
 
     def _on_effect(self, _e=None):
         eff = self.effect.get()
-        fixo = (eff == "Fixo")
-        if fixo:
-            self.body.pack(anchor="w", fill="x", pady=6)   # mostra a paleta
+        steady = (eff == "Steady")
+        if steady:
+            self.body.pack(anchor="w", fill="x", pady=6)   # show the palette
         else:
-            self.body.pack_forget()                        # esconde se não é Fixo
-        if eff == "Desligado":
-            self._send(device.send_off, "LED desligado")
-        elif fixo:
+            self.body.pack_forget()                        # hide unless the effect is Steady
+        if eff == "Off":
+            self._send(device.send_off, "LED off")
+        elif steady:
             self._commit_current()
         else:
-            self.status.config(text=f"'{eff}' ainda não implementado.", fg=T.ACCENT)
+            self.status.config(text=f"'{eff}' is not implemented yet.", fg=T.ACCENT)
 
     def _commit_current(self):
-        if self.effect.get() != "Fixo":
+        if self.effect.get() != "Steady":
             return
         r, g, b = self._rgb_from_state()
         self._refresh_preview()
@@ -323,8 +323,8 @@ class App:
         try:
             vias = fn()
             self.status.config(text=f"{ok_msg} — via {', '.join(vias)}", fg=T.MUTED)
-        except device.DeviceNotFound as e:
-            self.status.config(text=f"Erro: {e}", fg=T.DANGER)
+        except device.DeviceNotFound as exc:
+            self.status.config(text=f"Error: {exc}", fg=T.DANGER)
 
 
 def main():

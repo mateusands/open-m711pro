@@ -1,10 +1,10 @@
-"""Interface gráfica do open-m711pro em PySide6 (Qt).
+"""open-m711pro graphical interface, built on PySide6 (Qt).
 
-Inspirada no Logitech G HUB e no Piper (libratbag): barra lateral, roda de cores
-HSV desenhada com QPainter (anti-aliased), efeitos de iluminação e a seção de
-Sensibilidade (DPI), que lê e escreve os 5 estágios direto no mouse.
+Inspired by Logitech G HUB and Piper (libratbag): a sidebar, an anti-aliased HSV
+colour wheel drawn with QPainter, the lighting effects, and the Sensitivity (DPI)
+section, which reads and writes the five stages straight on the mouse.
 
-O núcleo (m711pro.core) continua stdlib puro; só esta GUI usa Qt.
+The core (m711pro.core) stays pure stdlib; only this GUI uses Qt.
 """
 import math
 import colorsys
@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
 )
 
-from .core import device, state, protocol
+from ..core import device, state, protocol
 
 ACCENT = "#19b8c8"
 
@@ -90,7 +90,7 @@ class ColorWheel(QWidget):
         self.update()
 
     def rgb(self):
-        # cor "cheia" (value=1.0); o brilho é um byte separado no protocolo.
+        # "full" colour (value=1.0); brightness is a separate byte in the protocol.
         r, g, b = colorsys.hsv_to_rgb(self.hue, self.sat, 1.0)
         return int(round(r * 255)), int(round(g * 255)), int(round(b * 255))
 
@@ -141,12 +141,12 @@ class ColorWheel(QWidget):
 
 
 # ---------------------------------------------------------------------------
-EFEITOS = ["Fixo", "Respiração", "Ciclo", "Desligado",
-           "Visualizador de áudio (em breve)"]
-COLOR_EFFECTS = {"Fixo", "Respiração", "Ciclo"}   # efeitos que usam a cor escolhida
+EFFECTS = ["Steady", "Breathing", "Cycle", "Off",
+           "Audio visualiser (coming soon)"]
+COLOR_EFFECTS = {"Steady", "Breathing", "Cycle"}   # effects that use the chosen colour
 PRESETS = [(255, 0, 0), (255, 128, 0), (255, 255, 0), (0, 255, 0),
            (0, 255, 255), (0, 0, 255), (180, 0, 255), (255, 255, 255)]
-POLLING = [1000, 500, 250, 125]   # ainda não mapeado — a seção é só informativa
+POLLING = [1000, 500, 250, 125]   # not mapped yet — the section is informational
 
 
 class LightingPage(QWidget):
@@ -157,11 +157,11 @@ class LightingPage(QWidget):
         self.setObjectName("page")
         root = QVBoxLayout(self); root.setContentsMargins(26, 22, 26, 22); root.setSpacing(14)
 
-        t = QLabel("ILUMINAÇÃO"); t.setObjectName("title"); root.addWidget(t)
+        t = QLabel("LIGHTING"); t.setObjectName("title"); root.addWidget(t)
 
         er = QHBoxLayout()
-        lbl = QLabel("EFEITO"); lbl.setObjectName("muted"); er.addWidget(lbl)
-        self.effect = QComboBox(); self.effect.addItems(EFEITOS)
+        lbl = QLabel("EFFECT"); lbl.setObjectName("muted"); er.addWidget(lbl)
+        self.effect = QComboBox(); self.effect.addItems(EFFECTS)
         self.effect.currentTextChanged.connect(self._on_effect)
         er.addWidget(self.effect); er.addStretch(); root.addLayout(er)
 
@@ -178,15 +178,15 @@ class LightingPage(QWidget):
         self.readout = QLabel("—"); self.readout.setStyleSheet("font-weight:600;")
         right.addWidget(self.readout)
 
-        bl = QLabel("BRILHO"); bl.setObjectName("muted"); right.addWidget(bl)
+        bl = QLabel("BRIGHTNESS"); bl.setObjectName("muted"); right.addWidget(bl)
         self.bright = QSlider(Qt.Horizontal); self.bright.setRange(15, 100)
         self.bright.setValue(100); self.bright.setFixedWidth(180)
         self.bright.valueChanged.connect(self._on_bright)
         self.bright.sliderReleased.connect(self._commit_current)
         right.addWidget(self.bright)
 
-        # Velocidade — só aparece nos efeitos animados
-        self.speed_label = QLabel("VELOCIDADE (Lenta → Rápida)")
+        # Speed — only shown for animated effects
+        self.speed_label = QLabel("SPEED (Slow -> Fast)")
         self.speed_label.setObjectName("muted"); right.addWidget(self.speed_label)
         self.speed = QSlider(Qt.Horizontal); self.speed.setRange(0, 100)
         self.speed.setValue(50); self.speed.setFixedWidth(180)
@@ -201,15 +201,15 @@ class LightingPage(QWidget):
             pr.addWidget(sw, 0, i)
         right.addLayout(pr)
 
-        custom = QPushButton("Cor personalizada…"); custom.setObjectName("action")
+        custom = QPushButton("Custom colour…"); custom.setObjectName("action")
         custom.clicked.connect(self._pick_custom); right.addWidget(custom)
         right.addStretch()
         body.addLayout(right); body.addStretch()
-        # Container dos controles de cor — some quando o efeito não usa cor.
+        # Colour controls container — hidden when the effect uses no colour.
         self.color_area = QWidget(); self.color_area.setLayout(body)
         root.addWidget(self.color_area)
 
-        # Aviso mostrado no lugar quando não há cor a escolher.
+        # Notice shown in its place when there is no colour to pick.
         self.no_color = QLabel("")
         self.no_color.setObjectName("muted"); self.no_color.setWordWrap(True)
         self.no_color.hide()
@@ -235,7 +235,7 @@ class LightingPage(QWidget):
         return 0xFF if pct >= 100 else pct
 
     def _refresh(self, r, g, b):
-        pct = self._bright_pct()                 # preview mostra a cor já com o brilho
+        pct = self._bright_pct()                 # the preview shows the colour with brightness applied
         self._set_preview_bg(r * pct // 100, g * pct // 100, b * pct // 100)
         self.readout.setText(f"#{r:02X}{g:02X}{b:02X}   RGB({r}, {g}, {b})   {pct}%")
 
@@ -244,11 +244,11 @@ class LightingPage(QWidget):
 
     def _send_fn(self):
         return {"Fixo": device.send_color,
-                "Respiração": device.send_breathing,
+                "Breathing": device.send_breathing,
                 "Ciclo": device.send_cycle}.get(self.effect.currentText())
 
     def _speed_byte(self):
-        # slider 0%(lenta) → 100%(rápida); byte menor = mais rápido (0xF0..0x08)
+        # slider 0% (slow) -> 100% (fast); a lower byte is faster (0xF0..0x08)
         pct = self.speed.value()
         return int(round(0xF0 - pct / 100 * (0xF0 - 0x08)))
 
@@ -259,7 +259,7 @@ class LightingPage(QWidget):
             return
         self._refresh(r, g, b)
         bb = self._bright_byte()
-        if eff in ("Respiração", "Ciclo"):
+        if eff in ("Breathing", "Cycle"):
             sp = self._speed_byte()
             call = lambda: fn(r, g, b, brightness=bb, speed=sp)
         else:
@@ -268,7 +268,7 @@ class LightingPage(QWidget):
 
     def _commit_rgb(self, r, g, b):
         h, s, _ = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
-        self.wheel.set_hs(h, s)                  # presets mantêm o brilho do slider
+        self.wheel.set_hs(h, s)                  # presets keep the slider brightness
         self._commit(r, g, b)
 
     def _commit_current(self):
@@ -281,24 +281,24 @@ class LightingPage(QWidget):
         self._refresh(*self.wheel.rgb())
 
     def _speed_visible(self, eff):
-        show = eff in ("Respiração", "Ciclo")   # velocidade só nos animados
+        show = eff in ("Breathing", "Cycle")   # speed only applies to animated effects
         self.speed_label.setVisible(show)
         self.speed.setVisible(show)
 
     def _on_effect(self, eff):
-        has_color = eff in COLOR_EFFECTS     # Fixo/Respiração/Ciclo usam cor
+        has_color = eff in COLOR_EFFECTS     # Steady/Breathing/Cycle use a colour
         self.color_area.setVisible(has_color)
         self.no_color.setVisible(not has_color)
         self._speed_visible(eff)
         if eff == "Desligado":
-            self.no_color.setText("Iluminação desligada.")
-            self._send(device.send_off, "LED desligado")
+            self.no_color.setText("Lighting is off.")
+            self._send(device.send_off, "LED off")
         elif has_color:
             self.no_color.setText("")
             self._commit_current()
         else:
-            self.no_color.setText(f"'{eff}' ainda não implementado — o LED não foi alterado.")
-            self.status.emit(f"'{eff}' ainda não implementado.", False)
+            self.no_color.setText(f"'{eff}' is not implemented yet — the LED was left untouched.")
+            self.status.emit(f"'{eff}' is not implemented yet.", False)
 
     def _pick_custom(self):
         c = QColorDialog.getColor(parent=self, title="Escolha uma cor")
@@ -306,8 +306,8 @@ class LightingPage(QWidget):
             self._commit_rgb(c.red(), c.green(), c.blue())
 
     def _apply_saved_state(self):
-        """Reflete o estado ATUAL — lê do hardware (nível 2); se falhar, usa a
-        persistência local (nível 1). Não reenvia nada ao mouse."""
+        """Reflect the CURRENT state — read from the hardware, falling back to the
+        locally persisted state. Nothing is sent back to the mouse."""
         st = device.read_led_state() or state.load()
         rgb = st.get("rgb")
         if rgb and len(rgb) == 3:
@@ -327,7 +327,7 @@ class LightingPage(QWidget):
             self.speed.setValue(spct)
             self.speed.blockSignals(False)
         eff = st.get("effect", "Fixo")
-        if eff not in EFEITOS:
+        if eff not in EFFECTS:
             eff = "Fixo"
         self.effect.blockSignals(True)          # refletir sem disparar envio
         self.effect.setCurrentText(eff)
@@ -337,22 +337,22 @@ class LightingPage(QWidget):
         self.no_color.setVisible(not has_color)
         self._speed_visible(eff)
         if not has_color:
-            self.no_color.setText("Iluminação desligada." if eff == "Desligado"
-                                  else f"'{eff}' ainda não implementado.")
+            self.no_color.setText("Lighting is off." if eff == "Off"
+                                  else f"'{eff}' is not implemented yet.")
 
     def _send(self, fn, ok):
         try:
             vias = fn()
             self.status.emit(f"{ok} — via {', '.join(vias)}", False)
-        except device.DeviceNotFound as e:
-            self.status.emit(f"Erro: {e}", True)
+        except device.DeviceNotFound as exc:
+            self.status.emit(f"Error: {exc}", True)
 
 
 class DpiSpinBox(QSpinBox):
-    """Campo de DPI cujas setinhas andam UM passo do hardware (~83 DPI).
+    """A DPI field whose arrows move ONE hardware step (~83 DPI).
 
-    Com passo fixo de 100 as setas caem em valores que o mouse não guarda
-    (700 vira 667). Andando de byte em byte, todo valor exibido existe.
+    With a fixed step of 100 the arrows land on values the mouse cannot hold
+    (700 becomes 667). Stepping byte by byte, every value shown really exists.
     """
     def stepBy(self, steps):
         b = protocol.dpi_to_byte(self.value()) + steps
@@ -361,13 +361,13 @@ class DpiSpinBox(QSpinBox):
 
 
 class DpiRow(QWidget):
-    """Um slider + um campo digitável para um valor de DPI.
+    """A slider plus a typed field for one DPI value.
 
-    O slider anda na unidade do REGISTRADOR (cada passo é um passo real do
-    mouse, ~83 DPI); o campo aceita o DPI digitado e, ao confirmar, mostra de
-    volta o valor que o hardware realmente vai guardar.
+    The slider moves in REGISTER units (each step is a real mouse step, ~83
+    DPI); the field accepts a typed DPI and, once confirmed, echoes back the
+    value the hardware will actually store.
     """
-    edited = Signal()          # o usuário confirmou um valor -> pode enviar
+    edited = Signal()          # the user confirmed a value -> safe to send
 
     def __init__(self, label):
         super().__init__()
@@ -413,15 +413,15 @@ class DpiRow(QWidget):
 
 
 class DpiPage(QWidget):
-    """Página de DPI ligada ao hardware (registrador 0x000C).
+    """DPI page wired to the hardware (register 0x000C).
 
-    Dois modos, à escolha do usuário e persistidos em state.json:
-    - "Um DPI só": o valor digitado vai para os 5 estágios, então o botão de
-      DPI do mouse cicla sem mudar a sensibilidade.
-    - "5 estágios": edita cada estágio separadamente.
+    Two modes, chosen by the user and persisted in state.json:
+    - "Single DPI": the typed value goes to all five stages, so the mouse's DPI
+      button cycles without changing the sensitivity.
+    - "5 stages": edit each stage separately.
     """
     status = Signal(str, bool)
-    MODES = [("single", "Um DPI só"), ("stages", "5 estágios")]
+    MODES = [("single", "Single DPI"), ("stages", "5 stages")]
 
     def __init__(self):
         super().__init__()
@@ -431,14 +431,14 @@ class DpiPage(QWidget):
         root = QVBoxLayout(self); root.setContentsMargins(26, 22, 26, 22); root.setSpacing(12)
 
         head = QHBoxLayout()
-        t = QLabel("SENSIBILIDADE (DPI)"); t.setObjectName("title")
+        t = QLabel("SENSITIVITY (DPI)"); t.setObjectName("title")
         head.addWidget(t); head.addStretch()
-        btn = QPushButton("Ler do mouse"); btn.setObjectName("action")
+        btn = QPushButton("Read from mouse"); btn.setObjectName("action")
         btn.clicked.connect(self._reload); head.addWidget(btn)
         root.addLayout(head)
 
         mr = QHBoxLayout()
-        mr.addWidget(self._muted("MODO")); mr.addSpacing(8)
+        mr.addWidget(self._muted("MODE")); mr.addSpacing(8)
         self.mode = QComboBox()
         for _, rotulo in self.MODES:
             self.mode.addItem(rotulo)
@@ -449,7 +449,7 @@ class DpiPage(QWidget):
         mr.addWidget(self.mode); mr.addStretch()
         root.addLayout(mr)
 
-        # --- modo "um DPI só" ---
+        # --- "single DPI" mode ---
         self.single_box = QWidget()
         sb = QVBoxLayout(self.single_box); sb.setContentsMargins(0, 0, 0, 0); sb.setSpacing(6)
         self.single = DpiRow("")
@@ -459,7 +459,7 @@ class DpiPage(QWidget):
         self.single_note.setWordWrap(True); sb.addWidget(self.single_note)
         root.addWidget(self.single_box)
 
-        # --- modo "5 estágios" ---
+        # --- "5 stages" mode ---
         self.stages_box = QWidget()
         gb = QVBoxLayout(self.stages_box); gb.setContentsMargins(0, 0, 0, 0); gb.setSpacing(7)
         self.rows = []
@@ -470,25 +470,25 @@ class DpiPage(QWidget):
         root.addWidget(self.stages_box)
 
         hint = QLabel(
-            f"O DPI é um byte só, com passo de ~{protocol.DPI_STEP:.0f} — não existe "
-            "700 (o vizinho é 667). Digite qualquer valor: ele cai no passo mais "
-            "próximo, e o número mostrado é o que o mouse realmente tem. "
-            "Sem erro nenhum: 1000, 2000, 4000, 8000.")
+            f"DPI is a single byte with a step of ~{protocol.DPI_STEP:.0f}, so 700 does "
+            "not exist (its neighbour is 667). Type any value: it snaps to the "
+            "nearest step, and the number shown is what the mouse actually holds. "
+            "Exact with no rounding: 1000, 2000, 4000, 8000.")
         hint.setObjectName("muted"); hint.setWordWrap(True); root.addWidget(hint)
 
-        root.addWidget(self._muted("LED INDICADOR DE NÍVEL (DPI EFFECT)"))
+        root.addWidget(self._muted("DPI STAGE INDICATOR (DPI EFFECT)"))
         self.effect_btn = QPushButton("—"); self.effect_btn.setObjectName("action")
         self.effect_btn.setCheckable(True); self.effect_btn.setEnabled(False)
         self.effect_btn.clicked.connect(self._toggle_effect)
         er = QHBoxLayout(); er.addWidget(self.effect_btn); er.addStretch()
         root.addLayout(er)
 
-        root.addWidget(self._muted("TAXA DE RELATÓRIO (Hz)"))
+        root.addWidget(self._muted("POLLING RATE (Hz)"))
         pol = QHBoxLayout(); pol.setSpacing(6)
         for hz in POLLING:
             pol.addWidget(self._chip(str(hz), hz == 1000))
         pol.addStretch(); root.addLayout(pol)
-        nm = QLabel("🚧 Polling ainda não mapeado — sem captura que confirme.")
+        nm = QLabel("Polling rate is not mapped yet — no capture confirms it.")
         nm.setStyleSheet(f"color:{ACCENT};"); root.addWidget(nm)
         root.addStretch()
         self._show_mode()
@@ -511,16 +511,16 @@ class DpiPage(QWidget):
         if self._mode_key() != "single" or not self._loaded:
             return
         if len(set(self._raw)) > 1:
-            atuais = " · ".join(str(protocol.byte_to_dpi(b)) for b in self._raw)
+            current = " · ".join(str(protocol.byte_to_dpi(b)) for b in self._raw)
             self.single_note.setText(
-                f"Os 5 estágios do mouse ainda estão diferentes ({atuais}). "
-                "Confirme um valor acima para deixar todos iguais.")
+                f"The five stages still differ ({current}). Confirm a value above to "
+                "make them all equal.")
         else:
             self.single_note.setText(
-                "Os 5 estágios estão iguais — o botão de DPI do mouse cicla "
-                "sem mudar a sensibilidade.")
+                "All five stages are equal — the mouse's DPI button cycles without "
+                "changing the sensitivity.")
 
-    # -- carga (só na primeira vez que a página aparece: a leitura é lenta) --
+    # -- loading (only the first time the page is shown: the read is slow) --
     def ensure_loaded(self):
         if not self._loaded:
             self._reload()
@@ -529,12 +529,12 @@ class DpiPage(QWidget):
         try:
             raw = device.read_dpi_bytes()
             eff = device.read_dpi_effect()
-        except device.DeviceNotFound as e:
-            self._enable(False); self.status.emit(f"Erro: {e}", True)
+        except device.DeviceNotFound as exc:
+            self._enable(False); self.status.emit(f"Error: {exc}", True)
             return
         if raw is None:
             self._enable(False)
-            self.status.emit("Não consegui ler o DPI — o mouse respondeu?", True)
+            self.status.emit("Could not read the DPI — did the mouse answer?", True)
             return
         self._raw = list(raw)
         for row, b in zip(self.rows, raw):
@@ -545,7 +545,7 @@ class DpiPage(QWidget):
             self._show_effect(eff[0])
         self._loaded = True
         self._update_single_note()
-        self.status.emit("DPI lido do mouse.", False)
+        self.status.emit("DPI read from the mouse.", False)
 
     def _enable(self, flag):
         for row in self.rows:
@@ -555,15 +555,15 @@ class DpiPage(QWidget):
 
     def _show_effect(self, on):
         self.effect_btn.setChecked(on)
-        self.effect_btn.setText("Ligado" if on else "Desligado")
+        self.effect_btn.setText("On" if on else "Off")
 
     # -- envio --------------------------------------------------------------
     def _send(self, raw, msg):
-        """Escreve a tabela e só adota os bytes novos se o envio deu certo."""
+        """Write the table, adopting the new bytes only if the send succeeded."""
         try:
             vias = device.send_dpi_bytes(raw)
-        except device.DeviceNotFound as e:
-            self.status.emit(f"Erro: {e}", True)
+        except device.DeviceNotFound as exc:
+            self.status.emit(f"Error: {exc}", True)
             return
         self._raw = list(raw)
         self._update_single_note()
@@ -572,14 +572,14 @@ class DpiPage(QWidget):
     def _commit_single(self):
         b = self.single.byte()
         self._send([b] * protocol.DPI_STAGES,
-                   f"DPI = {protocol.byte_to_dpi(b)} nos 5 estágios")
+                   f"DPI = {protocol.byte_to_dpi(b)} on all five stages")
 
     def _commit_stage(self, k):
-        # parte dos bytes LIDOS, não dos sliders: assim um estágio que o slider
-        # não consegue representar continua exatamente como estava
+        # start from the bytes we READ, not from the sliders: a stage the slider
+        # cannot represent then stays exactly as it was
         raw = list(self._raw)
         raw[k] = self.rows[k].byte()
-        self._send(raw, f"Estágio {k + 1} = {protocol.byte_to_dpi(raw[k])} DPI")
+        self._send(raw, f"Stage {k + 1} = {protocol.byte_to_dpi(raw[k])} DPI")
 
     def _toggle_effect(self):
         on = self.effect_btn.isChecked()
@@ -588,9 +588,9 @@ class DpiPage(QWidget):
             self._show_effect(on)
             self.status.emit(f"DPI Effect {'ligado' if on else 'desligado'}"
                              f" — via {', '.join(vias)}", False)
-        except device.DeviceNotFound as e:
+        except device.DeviceNotFound as exc:
             self.effect_btn.setChecked(not on)      # desfaz o toggle visual
-            self.status.emit(f"Erro: {e}", True)
+            self.status.emit(f"Error: {exc}", True)
 
     @staticmethod
     def _muted(text):
@@ -629,7 +629,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.dpi)
 
         self.nav_btns = []
-        for i, name in enumerate(["Iluminação", "Sensibilidade (DPI)"]):
+        for i, name in enumerate(["Lighting", "Sensitivity (DPI)"]):
             b = QPushButton(name); b.setObjectName("nav"); b.setCheckable(True)
             b.clicked.connect(lambda _=False, idx=i: self._go(idx))
             sl.addWidget(b); self.nav_btns.append(b)
@@ -638,7 +638,7 @@ class MainWindow(QMainWindow):
         top.addWidget(sidebar); top.addWidget(self.stack, 1)
         outer.addLayout(top, 1)
 
-        self.status = QLabel("Pronto."); self.status.setObjectName("statusbar")
+        self.status = QLabel("Ready."); self.status.setObjectName("statusbar")
         outer.addWidget(self.status)
 
         self._go(0)
@@ -648,7 +648,7 @@ class MainWindow(QMainWindow):
         for i, b in enumerate(self.nav_btns):
             b.setChecked(i == idx)
         if self.stack.currentWidget() is self.dpi:
-            self.dpi.ensure_loaded()      # a leitura é lenta; só ao abrir a aba
+            self.dpi.ensure_loaded()      # the read is slow; only when the tab opens
 
     def _status(self, msg, is_error):
         color = "#ff6b6b" if is_error else "#8b9098"
