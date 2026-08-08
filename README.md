@@ -2,24 +2,50 @@
 
 [![tests](https://github.com/mateusands/open-m711pro/actions/workflows/tests.yml/badge.svg)](https://github.com/mateusands/open-m711pro/actions/workflows/tests.yml)
 
-An open-source driver and configuration tool for the **Redragon M711 Pro**
-gaming mouse on Linux, written in pure Python.
+**Configure your Redragon M711 Pro (Cobra Pro) mouse on Linux — no Windows
+needed.** RGB lighting, DPI, polling rate, button remapping and macro-style key
+combinations, from a GUI or the command line.
 
-The vendor only ships a Windows application. This project reimplements its USB
-protocol, reverse-engineered by capturing the official software's traffic with
-`usbmon` + Wireshark and verifying every byte against real hardware.
+Redragon ships configuration software for Windows only. This project talks to
+the mouse directly: the USB protocol was reverse-engineered by capturing the
+official application's traffic with `usbmon` + Wireshark, and every byte is
+verified against real hardware before it ships.
+
+Written in pure Python. The core has **no dependencies at all**; the graphical
+interface uses Qt (PySide6) and is optional.
+
+<p align="center">
+  <img src="assets/dpi.png" alt="open-m711pro DPI page" width="720">
+</p>
 
 > Not affiliated with or endorsed by Redragon. Use at your own risk.
 
-## Device
+## Does this work with my mouse?
+
+Run `lsusb` and look for **`25a7:fa07`** or **`25a7:fa08`**:
+
+```
+Bus 001 Device 009: ID 25a7:fa07 Areson Technology Corp 2.4G Wireless Receiver
+Bus 001 Device 033: ID 25a7:fa08 Areson Technology Corp 2.4G Dual Mode Mouse
+```
 
 | Role | VID:PID | USB description |
 |------|---------|-----------------|
 | 2.4G receiver (dongle) | `25A7:FA07` | 2.4G Wireless Receiver |
 | Mouse (radio or cable) | `25A7:FA08` | 2.4G Dual Mode Mouse |
 
-`25A7` is **Compx**, a common OEM for wireless gaming mice. The same chip and
-protocol family are used by the Redragon M913 Impact Elite.
+The mouse is sold as the **Redragon M711 Pro**, **M711-PRO** and **Cobra Pro**
+depending on the market — the official software calls it COBRA PRO.
+
+`25A7` is **Compx**, a common OEM for wireless gaming mice, so the protocol
+family is shared with other devices. The Redragon **M913 Impact Elite** uses the
+same chip and the same USB IDs; if you have one, look at
+[m913-ctl](https://github.com/Qehbr/m913-ctl) and
+[mouse_m908](https://github.com/dokutan/mouse_m908) first — parts of this
+protocol were cross-checked against them.
+
+If [libratbag](https://github.com/libratbag/libratbag) / Piper does not list your
+Redragon, this is an alternative for this particular model.
 
 ## What works
 
@@ -103,6 +129,17 @@ open-m711pro button 9 media:mute
 > DPI is stored as a single byte with a step of ~83, so the value shown is what
 > the mouse actually holds: asking for 1600 gives 1583. The official app hides
 > this by displaying the number you typed. 1000, 2000, 4000 and 8000 are exact.
+
+## The interface
+
+<p align="center">
+  <img src="assets/lighting.png" alt="Lighting page: HSV colour wheel, effects, brightness and speed" width="440">
+  <img src="assets/buttons.png" alt="Buttons page: click a number on the mouse to jump to its row" width="440">
+</p>
+
+Click a number on the mouse diagram to jump to that button's row. The numbers
+are the ones the official app uses — and they are deliberately not the table
+indices, because the hardware does not order them the same way.
 
 ## Project layout
 

@@ -101,8 +101,9 @@ class ColorWheel(tk.Canvas):
 # ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
-EFFECTS = ["Steady", "Breathing", "Cycle", "Off"]
-COLOR_EFFECTS = {"Steady", "Breathing", "Cycle"}   # effects that use the colour
+# Names come from the core so the two can never drift apart.
+COLOR_EFFECTS = set(device.COLOR_EFFECTS)
+EFFECTS = list(device.COLOR_EFFECTS) + ["Off"]
 
 
 
@@ -266,9 +267,7 @@ class App:
         eff = self.effect.get()
         if eff not in COLOR_EFFECTS:
             return
-        send = {"Steady": device.send_color,
-                "Breathing": device.send_breathing,
-                "Cycle": device.send_cycle}[eff]
+        send = device.sender_for(eff)
         r, g, b = self._rgb_from_state()
         self._refresh_preview()
         self._send(lambda: send(r, g, b), f"{eff} #{r:02X}{g:02X}{b:02X}")
