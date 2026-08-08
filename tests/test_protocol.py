@@ -185,8 +185,9 @@ def test_actions_match_the_hardware():
     # read from the mouse after assigning each action through the official app
     assert p.btn_fire(0x28, 3) == (0x04, 0x28, 0x03)
     assert p.btn_three_click() == (0x04, 0x32, 0x03)
-    assert p.btn_rgb_toggle() == (0x07, 0x00, 0x00)
-    assert p.btn_polling_switch() == (0x08, 0x00, 0x00)
+    # single-variable experiment: button 2 set to "RGB ON/OFF" alone -> 0x08
+    assert p.btn_rgb_toggle() == (0x08, 0x00, 0x00)
+    assert p.btn_polling_switch() == (0x07, 0x00, 0x00)
     assert p.btn_dpi_up() == (0x02, 0x02, 0x00)
     assert p.BTN_NONE == (0x00, 0x00, 0x00)
     assert p.BTN_EXTENDED == (0x05, 0x00, 0x00)
@@ -220,22 +221,22 @@ def test_extended_slot_address():
 
 
 def test_multimedia_matches_capture():
-    assert p.build_media(9, p.MEDIA_PREVIOUS).hex() == \
+    assert p.build_media(9, p.MEDIA_PREVIOUS)[0].hex() == \
         "0807000220080282b60042b600230000c7"
-    assert p.build_media(10, p.MEDIA_PLAY_PAUSE).hex() == \
+    assert p.build_media(10, p.MEDIA_PLAY_PAUSE)[0].hex() == \
         "0807000240080282cd0042cd00f50000a7"
-    assert p.build_media(11, p.MEDIA_NEXT).hex() == \
+    assert p.build_media(11, p.MEDIA_NEXT)[0].hex() == \
         "0807000260080282b50042b50025000087"
 
 
 def test_multimedia_mute_matches_the_hardware():
     # read from the mouse after assigning "Mute" through the official app
-    assert p.build_media(9, p.MEDIA_MUTE)[6:14].hex() == "0282e20042e200cb"
+    assert p.build_media(9, p.MEDIA_MUTE)[0][6:14].hex() == "0282e20042e200cb"
 
 
 def test_multimedia_accepts_a_16_bit_usage():
     # "Home page" is HID Consumer Page usage 0x0223 — two bytes, little-endian
-    pkt = p.build_media(9, 0x0223)
+    pkt = p.build_media(9, 0x0223)[0]
     assert pkt[6:14].hex() == "0282230242230245"
     assert sum(pkt) % 256 == p.CHECKSUM_TARGET
 
@@ -249,3 +250,102 @@ def test_read_uses_a_16_bit_address():
 def test_reading_the_led_is_unchanged():
     # regression: the LED lives on page zero and must not change by a byte
     assert p.build_read(0xA0, 8).hex() == "08080000a008000000000000000000009d"
+
+
+# --- Per-stage DPI colours (register 0x002C) --------------------------------
+# The mouse shows a colour per DPI stage. Same shape as the DPI table: five
+# 4-byte records in three captured packets (LEN 8 / 8 / 4).
+
+FACTORY_COLORS = [(255, 0, 0), (0, 0, 255), (0, 255, 0), (255, 255, 0), (255, 128, 0)]
+
+
+def test_dpi_colors_match_capture():
+    assert [x.hex() for x in p.build_dpi_colors(FACTORY_COLORS)] == [
+        "080700002c08ff0000560000ff56000068",
+        "08070000340800ff0056ffff0057000060",
+        "080700003c04ff8000d6000000000000b1",
+    ]
+
+
+def test_every_dpi_color_record_settles_at_0x55():
+    for pkt in p.build_dpi_colors(FACTORY_COLORS):
+        assert sum(pkt) % 256 == p.CHECKSUM_TARGET
+        for i in range(6, 6 + pkt[5], 4):
+            assert sum(pkt[i:i + 4]) % 256 == p.CHECKSUM_TARGET
+
+
+def test_dpi_colors_requires_five_stages():
+    for wrong in ([(0, 0, 0)] * 4, [(0, 0, 0)] * 6):
+        try:
+            p.build_dpi_colors(wrong)
+        except ValueError:
+            continue
+        raise AssertionError("build_dpi_colors should reject a wrong-sized table")
+
+
+# --- Independent X/Y axes ---------------------------------------------------
+def test_dpi_table_bytes_accepts_an_independent_xy_stage():
+    # a stage given as a pair writes different axis bytes, with a valid record
+    pkts = p.build_dpi_table_bytes([(0x07, 0x17), 0x17, 0x2F, 0x5F, 0xBD])
+    assert pkts[0][6:10].hex() == "07170037"
+    assert sum(pkts[0][6:10]) % 256 == p.CHECKSUM_TARGET
+    assert pkts[0][10:14].hex() == "17170027"        # neighbour untouched
+
+
+def test_dpi_table_accepts_an_independent_xy_stage_in_dpi():
+    pkts = p.build_dpi_table([(700, 2000), 2000, 4000, 8000, 16000])
+    assert pkts[0][6:8] == bytes([p.dpi_to_byte(700), p.dpi_to_byte(2000)])
+
+
+def test_int_and_equal_tuple_produce_identical_packets():
+    single = p.build_dpi_table_bytes([0x07, 0x17, 0x2F, 0x5F, 0xBD])
+    paired = p.build_dpi_table_bytes([(0x07, 0x07), (0x17, 0x17), (0x2F, 0x2F),
+                                      (0x5F, 0x5F), (0xBD, 0xBD)])
+    assert single == paired
+
+
+# --- Extended slot: the general event list ----------------------------------
+# Decoded on this mouse. The first data byte is the EVENT COUNT, not a type,
+# and every event is <type> <code lo> <code hi>. Both records below were read
+# back from the hardware after assigning them through the official app.
+
+def test_keyboard_key_matches_the_hardware():
+    # button 2 given a single key: slot 0x0120 held this
+    pkts = p.build_key(1, 0x1F)
+    assert len(pkts) == 1
+    assert pkts[0][6:14].hex() == "02811f00411f0053"
+
+
+def test_modifier_combo_matches_the_hardware():
+    # Button 7 given Ctrl+C. The record is 14 bytes, which does NOT fit one
+    # packet, so it goes out as two — and reassembling them must reproduce the
+    # exact bytes read back from slot 0x0260.
+    pkts = p.build_combo(11, p.MOD_CTRL_L, 0x06)
+    assert len(pkts) == 2
+    assert all(len(x) == 17 for x in pkts)
+    assert (pkts[0][3] << 8 | pkts[0][4]) == 0x0260
+    assert (pkts[1][3] << 8 | pkts[1][4]) == 0x026A     # continues ten bytes on
+    rebuilt = pkts[0][6:6 + pkts[0][5]] + pkts[1][6:6 + pkts[1][5]]
+    assert rebuilt.hex() == "0480010081060040010041060 0c1".replace(" ", "")
+    assert all(sum(x) % 256 == p.CHECKSUM_TARGET for x in pkts)
+
+
+def test_event_count_is_the_first_data_byte():
+    assert p.build_key(0, 0x04)[0][6] == 2              # press + release
+    assert p.build_media(0, p.MEDIA_MUTE)[0][6] == 2
+    assert p.build_combo(0, p.MOD_CTRL_L, 0x06)[0][6] == 4
+
+
+def test_a_packet_never_exceeds_17_bytes():
+    # the guard that would have caught the oversized combo packet
+    for n in range(1, 7):
+        for pkt in p.build_events(0, [(p.EVENT_KEY_DOWN, 0x04)] * n):
+            assert len(pkt) == 17, f"{n} events produced a {len(pkt)}-byte packet"
+
+
+def test_build_write_rejects_data_that_cannot_fit():
+    try:
+        p.build_write(0x0100, [0] * (p.MAX_DATA + 1))
+    except ValueError:
+        return
+    raise AssertionError("build_write should refuse more data than a packet holds")

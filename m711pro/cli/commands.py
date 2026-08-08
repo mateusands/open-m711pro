@@ -11,15 +11,20 @@ Usage:
     python3 main.py dpi 3 4000     # stage 3 = 4000 DPI
     python3 main.py dpi-effect on  # DPI stage indicator LED (on/off)
 
+    python3 main.py polling        # show the USB polling rate
+    python3 main.py polling 500    # set it to 500 Hz
+
     python3 main.py buttons        # list the 16 buttons
     python3 main.py button 1 middle
     python3 main.py button 9 media:mute
+    python3 main.py button 9 key:a
 """
 import sys
 
 from ..core import device
 from ..core import protocol
 from ..data.colors import NAMED
+from ..data.hid_keys import KEYS, MODIFIERS
 
 OFF_WORDS = {'off', 'desligar', 'desliga', 'apagar'}
 ON_WORDS = {'on', 'ligar', 'liga', 'ligado'}
@@ -35,8 +40,11 @@ def parse_action(argv):
             return 'color', NAMED[arg]
         hexcode = arg.lstrip('#')
         if len(hexcode) == 6:
-            return 'color', (int(hexcode[0:2], 16), int(hexcode[2:4], 16),
-                             int(hexcode[4:6], 16))
+            try:
+                return 'color', (int(hexcode[0:2], 16), int(hexcode[2:4], 16),
+                                 int(hexcode[4:6], 16))
+            except ValueError:
+                pass          # six characters, but not hex — fall through to usage
     if len(argv) == 3:
         return 'color', tuple(max(0, min(255, int(x))) for x in argv)
     raise SystemExit(__doc__)
@@ -91,6 +99,36 @@ def _cmd_dpi_effect(argv):
     print(f"DPI Effect {'on' if on else 'off'} (via {', '.join(routes)})")
 
 
+POLLING_USAGE = ("Usage: main.py polling          # show the current rate\n"
+                 "       main.py polling <hz>    # "
+                 + " | ".join(str(hz) for hz in
+                              sorted(protocol.POLLING_RATES, reverse=True)))
+
+
+def _cmd_polling(argv):
+    """`polling` shows the rate; `polling <hz>` sets it."""
+    if not argv:
+        hz, raw = device.read_polling()
+        if raw is None:
+            raise SystemExit("Error: could not read the polling rate from the "
+                             "mouse — is the dongle plugged in and the device "
+                             "free?")
+        if hz is None:
+            raise SystemExit(f"Error: the mouse answered with an unknown "
+                             f"polling code {raw:#04x}. Only 01/02/04/08 are "
+                             f"known; please report this.")
+        print(f"USB polling: {hz} Hz")
+        return
+    if len(argv) != 1:
+        raise SystemExit(POLLING_USAGE)
+    try:
+        hz = int(argv[0])
+    except ValueError:
+        raise SystemExit(f"Error: the rate must be a number.\n{POLLING_USAGE}")
+    routes = device.send_polling(hz)
+    print(f"USB polling = {hz} Hz (via {', '.join(routes)})")
+
+
 ACTIONS = {
     'left': lambda: protocol.btn_mouse(protocol.MOUSE_LEFT),
     'right': lambda: protocol.btn_mouse(protocol.MOUSE_RIGHT),
@@ -118,12 +156,15 @@ ACTION_NAMES = {
     (0x01, 0x04, 0x00): 'middle', (0x01, 0x08, 0x00): 'back',
     (0x01, 0x10, 0x00): 'forward', (0x02, 0x02, 0x00): 'dpi+',
     (0x02, 0x03, 0x00): 'dpi-', (0x02, 0x01, 0x00): 'dpi-cycle',
-    (0x07, 0x00, 0x00): 'rgb', (0x08, 0x00, 0x00): 'polling',
+    (0x08, 0x00, 0x00): 'rgb', (0x07, 0x00, 0x00): 'polling',
 }
 BUTTON_USAGE = ("Usage: main.py buttons               # list the 16 buttons\n"
                 "       main.py button <0-15> <action>\n"
                 f"actions: {' '.join(sorted(ACTIONS))}\n"
-                f"media:   {' '.join('media:' + m for m in sorted(MEDIA))}")
+                f"media:   {' '.join('media:' + m for m in sorted(MEDIA))}\n"
+                "keys:    key:<name>       a-z 0-9 f1-f12 enter esc "
+                "backspace tab space\n"
+                f"combos:  combo:ctrl+c     modifiers: {' '.join(sorted(MODIFIERS))}")
 
 
 def _cmd_buttons(argv):
@@ -157,6 +198,30 @@ def _cmd_button(argv):
         routes, _ = device.send_media(index, MEDIA[key])
         print(f"Button {index} = media '{key}' (via {', '.join(routes)})")
         return
+    if name.startswith('key:'):
+        key = name.split(':', 1)[1]
+        if key not in KEYS:
+            raise SystemExit(f"Error: unknown key '{key}'.\n{BUTTON_USAGE}")
+        routes, _ = device.send_key(index, KEYS[key])
+        print(f"Button {index} = key '{key}' (via {', '.join(routes)})")
+        return
+    if name.startswith('combo:'):
+        parts = name.split(':', 1)[1].split('+')
+        key = parts[-1]
+        if key not in KEYS:
+            raise SystemExit(f"Error: unknown key '{key}'.\n{BUTTON_USAGE}")
+        mods = 0
+        for m in parts[:-1]:
+            if m not in MODIFIERS:
+                raise SystemExit(f"Error: unknown modifier '{m}' — use "
+                                 f"{', '.join(sorted(MODIFIERS))}.\n{BUTTON_USAGE}")
+            mods |= MODIFIERS[m]
+        if not mods:
+            raise SystemExit(f"Error: a combo needs a modifier, e.g. combo:ctrl+c."
+                             f"\n{BUTTON_USAGE}")
+        routes, _ = device.send_combo(index, mods, KEYS[key])
+        print(f"Button {index} = {name.split(':', 1)[1]} (via {', '.join(routes)})")
+        return
     if name not in ACTIONS:
         raise SystemExit(f"Error: unknown action '{name}'.\n{BUTTON_USAGE}")
     routes, _ = device.send_button(index, ACTIONS[name]())
@@ -168,6 +233,7 @@ COMMANDS = {
     'dpi-effect': _cmd_dpi_effect, 'dpieffect': _cmd_dpi_effect,
     'buttons': _cmd_buttons,
     'button': _cmd_button,
+    'polling': _cmd_polling,
 }
 
 

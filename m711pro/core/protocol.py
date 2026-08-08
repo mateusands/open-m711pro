@@ -10,9 +10,13 @@ CHECKSUM_TARGET = 0x55
 
 LED_ADDR = 0xA0           # LED register
 # EFFECT byte (data[0]) — decoded from USB captures.
-# The official app names the effects Steady, Respiration, Neon, Streaming and
-# OFF; 0x00 is most likely "Streaming" but that mapping is not confirmed yet.
-EFFECT_CYCLE = 0x00       # running / rainbow cycle
+# The official app names its five effects Steady, Respiration, Neon, Streaming
+# and OFF. Selecting "Streaming" in the app leaves 0x00 in this register, so the
+# names below are the app's own; Neon is 0x03 by elimination and is the one
+# value we have never written.
+EFFECT_STREAMING = 0x00   # running / rainbow cycle ("Streaming" in the app)
+EFFECT_NEON = 0x03        # not implemented yet — never written or read
+EFFECT_CYCLE = EFFECT_STREAMING          # kept: the name used before
 EFFECT_BREATHING = 0x01   # breathing (pulses the colour)
 EFFECT_STEADY = 0x02      # static colour
 EFFECT_OFF = 0x04         # off
@@ -41,11 +45,22 @@ def record(values):
     return values + [checksum(values)]
 
 
+# A packet is 17 bytes: six of header, one of checksum, so at most ten of data.
+MAX_DATA = 10
+
+
 def build_write(addr, data):
     """A 17-byte write packet (opcode 0x07) with a 16-bit address.
 
     Layout: 08 07 00 <ADDR_HI> <ADDR_LO> <LEN> <data...> <padding> <cksum>
+
+    Raises when the data cannot fit. Without this guard an over-long record
+    silently produced a packet longer than the HID report, which the device
+    would never have accepted — see build_events, which splits instead.
     """
+    if len(data) > MAX_DATA:
+        raise ValueError(f"a packet holds at most {MAX_DATA} data bytes, "
+                         f"got {len(data)} — split the record across packets")
     data = [b & 0xFF for b in data]
     payload = ([0x08, 0x07, 0x00, (addr >> 8) & 0xFF, addr & 0xFF, len(data)]
                + data)
@@ -102,6 +117,35 @@ def build_read(addr, length=8):
     return bytes(payload + [checksum(payload)])
 
 
+# --- USB polling rate (register 0x0000) -------------------------------------
+# A 2-byte record: <code> <record checksum>, LEN 2.
+#
+# ORIGIN OF THE CODES: they were first decoded by the m913-ctl project
+# (github.com/Qehbr/m913-ctl, GPL-3.0) from THEIR USB captures of the same Compx
+# chip. They have since been verified on this hardware: all four were written,
+# read back and restored, and with the register at 0x01 the actual report rate
+# measured ~1002 Hz on the mouse's interrupt endpoint — an independent
+# confirmation that 0x01 really is 1000 Hz.
+POLLING_ADDR = 0x0000
+POLLING_RATES = {1000: 0x01, 500: 0x02, 250: 0x04, 125: 0x08}
+
+
+def build_polling(hz):
+    """Packet setting the USB polling rate. `hz` is one of the POLLING_RATES keys."""
+    if hz not in POLLING_RATES:
+        supported = ", ".join(str(v) for v in sorted(POLLING_RATES, reverse=True))
+        raise ValueError(f"unsupported polling rate {hz} Hz — use one of: {supported}")
+    return build_write(POLLING_ADDR, record([POLLING_RATES[hz]]))
+
+
+def polling_from_byte(code):
+    """Register byte -> polling rate in Hz, or None when the code is unknown."""
+    for hz, value in POLLING_RATES.items():
+        if value == (code & 0xFF):
+            return hz
+    return None
+
+
 # --- DPI (register 0x000C) --------------------------------------------------
 DPI_ADDR = 0x000C
 DPI_STAGES = 5            # the app writes exactly five stages
@@ -128,11 +172,27 @@ def byte_to_dpi(n):
     return round((n + 1) * 250 / 3)
 
 
+def axis_pair(entry):
+    """The two axis values of a table entry: a single value (X = Y) or (x, y).
+
+    The official app keeps the axes equal and exposes an "XY Independent"
+    toggle; the record format holds them separately either way, so both forms
+    are accepted and the single value stays the captured behaviour.
+    """
+    if isinstance(entry, (tuple, list)):
+        if len(entry) != 2:
+            raise ValueError("an axis entry is one value or an (x, y) pair, "
+                             f"got {len(entry)} values")
+        return entry[0], entry[1]
+    return entry, entry
+
+
 def build_dpi_table_bytes(values):
     """The THREE DPI table packets, from the raw register bytes.
 
     Each entry takes 4 bytes (`X Y 00 <cksum>`); X and Y are the axes, kept
-    equal by the official app. We only emit the packet shapes seen in captures:
+    equal by the official app. A stage is therefore either one byte (X = Y) or
+    an (x_byte, y_byte) pair. We only emit the packet shapes seen in captures:
     0x0C with LEN 8, 0x14 with LEN 8 and 0x1C with LEN 4. Writing a single
     stage on its own has never been observed, so it is not offered.
 
@@ -142,15 +202,48 @@ def build_dpi_table_bytes(values):
     """
     if len(values) != DPI_STAGES:
         raise ValueError(f"the table needs {DPI_STAGES} stages, got {len(values)}")
-    e = [record([v & 0xFF] * 2 + [0x00]) for v in values]
+    e = []
+    for value in values:
+        x, y = axis_pair(value)
+        e.append(record([x & 0xFF, y & 0xFF, 0x00]))
     return [build_write(DPI_ADDR, e[0] + e[1]),
             build_write(DPI_ADDR + 8, e[2] + e[3]),
             build_write(DPI_ADDR + 16, e[4])]
 
 
 def build_dpi_table(stages):
-    """Like build_dpi_table_bytes, but taking the five values in DPI."""
-    return build_dpi_table_bytes([dpi_to_byte(d) for d in stages])
+    """Like build_dpi_table_bytes, but taking the five values in DPI.
+
+    A stage is a DPI number (both axes) or an (x_dpi, y_dpi) pair.
+    """
+    return build_dpi_table_bytes(
+        [tuple(dpi_to_byte(v) for v in axis_pair(s)) for s in stages])
+
+
+# --- Per-stage DPI colour (register 0x002C) ---------------------------------
+# The LED colour the mouse shows for each DPI stage. Structurally the twin of
+# build_dpi_table_bytes: five 4-byte records written as the same three captured
+# shapes (LEN 8, LEN 8, LEN 4) at base+0, base+8 and base+16. Only the base
+# address and the meaning of the three data bytes differ (`R G B` here,
+# `X Y 00` there).
+DPI_COLOR_ADDR = 0x002C
+
+
+def build_dpi_colors(colors):
+    """The THREE packets that write the per-stage DPI LED colours.
+
+    `colors` is five (r, g, b) tuples, one per DPI stage. Each becomes a 4-byte
+    record `R G B <record checksum>`. As with the DPI table, the register is
+    written whole, so changing one stage means passing the other four through
+    untouched (see device.send_dpi_color).
+    """
+    if len(colors) != DPI_STAGES:
+        raise ValueError(f"the table needs {DPI_STAGES} colours, "
+                         f"got {len(colors)}")
+    e = [record([r, g, b]) for r, g, b in colors]
+    return [build_write(DPI_COLOR_ADDR, e[0] + e[1]),
+            build_write(DPI_COLOR_ADDR + 8, e[2] + e[3]),
+            build_write(DPI_COLOR_ADDR + 16, e[4])]
 
 
 # --- Buttons (registers 0x0060-0x009F) --------------------------------------
@@ -208,17 +301,23 @@ def btn_three_click():
 def btn_rgb_toggle():
     """Toggle the LED on/off.
 
-    NOTE: m913-ctl assigns 0x07 to "polling switch" and 0x08 to "led toggle" —
-    the opposite of this. We follow what was measured on this mouse: assigning
-    "RGB ON/OFF" through the official app left the register at 0x07. The
-    disagreement is recorded in the README and still needs a tie-breaker.
+    Confirmed by a single-variable experiment: with the official app, button 2
+    was set to "RGB ON/OFF" and nothing else, and its record became 0x08. An
+    earlier multi-change experiment had suggested 0x07, but that run changed
+    seven buttons at once and its button-to-index attribution turned out to be
+    unreliable. m913-ctl had 0x08 for this all along.
     """
-    return (0x07, 0x00, 0x00)
+    return (0x08, 0x00, 0x00)
 
 
 def btn_polling_switch():
-    """Cycle the USB polling rate. See the caveat on btn_rgb_toggle()."""
-    return (0x08, 0x00, 0x00)
+    """Cycle the USB polling rate.
+
+    0x07 by elimination: the single-variable test above pinned 0x08 to the LED
+    toggle, and these two are the pair the official app offers. Not yet
+    confirmed by its own isolated experiment.
+    """
+    return (0x07, 0x00, 0x00)
 
 
 def build_buttons(actions):
@@ -244,10 +343,32 @@ def build_buttons(actions):
 # Actions that do not fit the 3 bytes of a basic record live in a 32-byte slot.
 # The button record holds BTN_EXTENDED and the slot holds the press and release
 # events.
+# The slot holds an EVENT LIST, not a fixed pair:
+#
+#     <event count> [ <type> <code lo> <code hi> ] * count <record checksum>
+#
+# Decoded on this mouse: assigning Ctrl+C through the official app produced a
+# four-event record (modifier down, key down, modifier up, key up), which is
+# what proved that the first byte counts events rather than naming a type.
+# The codes are standard HID usages — the same Ctrl+C record carries 0x01 (the
+# left-control modifier bit) and 0x06 (the keyboard usage for "c").
 EXT_SLOT_BASE = 0x0100
 EXT_SLOT_STRIDE = 0x20
-EVENT_MEDIA_DOWN = 0x82        # press, HID Consumer Page
+EVENT_MEDIA_DOWN = 0x82        # press, HID Consumer Page (16-bit code)
 EVENT_MEDIA_UP = 0x42          # release
+EVENT_KEY_DOWN = 0x81          # press, HID Keyboard Page
+EVENT_KEY_UP = 0x41            # release
+EVENT_MOD_DOWN = 0x80          # press, modifier bitmask
+EVENT_MOD_UP = 0x40            # release
+
+# HID modifier bits, as carried by the 0x80/0x40 events.
+MOD_CTRL_L = 0x01
+MOD_SHIFT_L = 0x02
+MOD_ALT_L = 0x04
+MOD_WIN_L = 0x08
+MOD_CTRL_R = 0x10
+MOD_SHIFT_R = 0x20
+MOD_ALT_R = 0x40
 
 # HID Consumer Page usages. The first four were confirmed on this mouse; the
 # rest come from the m913-ctl table and have not been tested here.
@@ -267,6 +388,27 @@ def ext_slot_addr(index):
     return EXT_SLOT_BASE + EXT_SLOT_STRIDE * index
 
 
+def build_events(index, events):
+    """The packets writing an event list into button `index`'s extended slot.
+
+    `events` is a list of (type, code) pairs; `code` may be 16-bit (the
+    multimedia usages are). The record is the event count followed by three
+    bytes per event, closed by the usual checksum.
+
+    Returns a LIST because the record outgrows a single packet: two events fit
+    in one, but a modifier combination is four events (14 bytes) and needs two,
+    continuing at the next ten-byte boundary. That is how the record is laid out
+    in memory — reading slot 0x0260 back gives the two halves contiguously.
+    """
+    data = [len(events)]
+    for event_type, code in events:
+        data += [event_type, code & 0xFF, (code >> 8) & 0xFF]
+    data = record(data)
+    base = ext_slot_addr(index)
+    return [build_write(base + off, data[off:off + MAX_DATA])
+            for off in range(0, len(data), MAX_DATA)]
+
+
 def build_media(index, usage):
     """Write a multimedia key into the extended slot of button `index`.
 
@@ -275,9 +417,37 @@ def build_media(index, usage):
 
     For the button to fire, its basic record must be BTN_EXTENDED.
     """
-    lo, hi = usage & 0xFF, (usage >> 8) & 0xFF
-    data = record([0x02, EVENT_MEDIA_DOWN, lo, hi, EVENT_MEDIA_UP, lo, hi])
-    return build_write(ext_slot_addr(index), data)
+    return build_events(index, [(EVENT_MEDIA_DOWN, usage),
+                                (EVENT_MEDIA_UP, usage)])
+
+
+def build_key(index, usage):
+    """Write a keyboard key into the extended slot of button `index`.
+
+    `usage` is a HID Keyboard Page code (see m711pro/data/hid_keys.py) — a
+    single byte, so the high byte the multimedia record uses for the 16-bit
+    consumer usage stays zero here.
+
+    Verified on this hardware: assigning a single key to button 2 through the
+    official app produced `02 81 1f 00 41 1f 00 53` in slot 0x0120 — the same
+    shape this builds.
+    """
+    return build_events(index, [(EVENT_KEY_DOWN, usage),
+                                (EVENT_KEY_UP, usage)])
+
+
+def build_combo(index, modifiers, usage):
+    """Write a modifier + key combination (e.g. Ctrl+C) into button `index`.
+
+    Modifiers travel as their own events, which is why a combo is four events
+    and not two. Verified byte for byte against the Ctrl+C record the official
+    app wrote to this mouse:
+        04 | 80 01 00 | 81 06 00 | 40 01 00 | 41 06 00 | c1
+    """
+    return build_events(index, [(EVENT_MOD_DOWN, modifiers),
+                                (EVENT_KEY_DOWN, usage),
+                                (EVENT_MOD_UP, modifiers),
+                                (EVENT_KEY_UP, usage)])
 
 
 # --- DPI Effect (register 0x004C) -------------------------------------------
