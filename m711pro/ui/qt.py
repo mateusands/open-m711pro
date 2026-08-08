@@ -664,7 +664,7 @@ class DpiPage(QWidget):
             self.status.emit("DPI read from the mouse.", False)
 
     def _enable(self, flag):
-        for row in self.rows:
+        for row in self.rows.values():
             row.setEnabled(flag)
         self.xy.setEnabled(flag)
         self.single.setEnabled(flag)
@@ -1005,21 +1005,27 @@ class ButtonsPage(QWidget):
         root.addLayout(head)
 
         note = QLabel(
-            "Click a number on the mouse to jump to its row. The numbers are the "
-            "ones the official app uses, and they are NOT the table indices — "
-            "buttons 6, 7 and 8 live at slots 10, 11 and 9. The table has 16 slots "
-            "and is rewritten whole on every change, so all of them are shown; the "
-            "ones marked unused have no button behind them on this model.")
+            "Click a number on the mouse to jump to its row. These are the eight "
+            "buttons the mouse actually has, numbered the way the official app "
+            "numbers them. The register table has sixteen slots, but the other "
+            "eight fire nothing on this model — they are preserved untouched on "
+            "every write and simply not offered here.")
         note.setObjectName("muted"); note.setWordWrap(True); root.addWidget(note)
 
         body = QWidget(); body.setObjectName("rowsBody")
         rows = QVBoxLayout(body); rows.setContentsMargins(0, 0, 8, 0); rows.setSpacing(6)
-        self.rows = []
-        for i in range(protocol.BUTTON_COUNT):
-            row = ButtonRow(i)
+        # Only the slots a physical button fires, laid out in the order the
+        # mouse numbers them. The table has 16 slots and the other eight are
+        # dead on this model — showing them as "Disabled" invited people to
+        # configure buttons that do not exist. They are still preserved on
+        # every write; they just are not offered.
+        self.rows = {}
+        for label in sorted(MouseDiagram.BUTTONS):
+            index = MouseDiagram.BUTTONS[label][1]
+            row = ButtonRow(index)
             row.action_edited.connect(self._on_action)
             row.media_edited.connect(self._on_media)
-            rows.addWidget(row); self.rows.append(row)
+            rows.addWidget(row); self.rows[index] = row
         rows.addStretch()
 
         area = QScrollArea(); area.setObjectName("rows")
@@ -1048,7 +1054,7 @@ class ButtonsPage(QWidget):
         self.diagram.set_active(index)
         row = self.rows[index]
         self._area.ensureWidgetVisible(row)
-        for i, other in enumerate(self.rows):
+        for i, other in self.rows.items():
             other.setProperty("focused", i == index)
             other.style().unpolish(other); other.style().polish(other)
 
@@ -1070,8 +1076,9 @@ class ButtonsPage(QWidget):
         self._table = [tuple(a) for a in table]
         self._media = {}
         for i, action in enumerate(self._table):
-            extended = action == protocol.BTN_EXTENDED
-            if extended:
+            if i not in self.rows:          # a slot no button fires; kept, not shown
+                continue
+            if action == protocol.BTN_EXTENDED:
                 self._media[i] = self._read_media(i)
             self._show(i)
         self._enable(True)
@@ -1107,7 +1114,7 @@ class ButtonsPage(QWidget):
         row.show_media(extended)
 
     def _enable(self, flag):
-        for row in self.rows:
+        for row in self.rows.values():
             row.setEnabled(flag)
 
     # -- sending ------------------------------------------------------------
