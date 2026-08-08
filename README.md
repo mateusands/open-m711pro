@@ -11,8 +11,9 @@ the mouse directly: the USB protocol was reverse-engineered by capturing the
 official application's traffic with `usbmon` + Wireshark, and every byte is
 verified against real hardware before it ships.
 
-Written in pure Python. The core has **no dependencies at all**; the graphical
-interface uses Qt (PySide6) and is optional.
+Written in pure Python, for **Linux** (it drives the mouse through `hidraw`).
+The core has **no dependencies at all**; the graphical interface uses Qt
+(PySide6) and is optional.
 
 <p align="center">
   <img src="assets/dpi.png" alt="open-m711pro DPI page" width="720">
@@ -70,12 +71,27 @@ analogy with the M913 but not confirmed here.
 - The core is **pure stdlib**. The Qt interface needs `PySide6`; without it the
   app falls back to a tkinter UI.
 
+## Platform support
+
+**Linux only.** This is not a limitation of the packaging — the driver reads
+`/sys/class/hidraw/`, opens `/dev/hidraw*` and drives it with the
+`HIDIOCSFEATURE` ioctl, all of which are Linux kernel interfaces.
+
+macOS has no hidraw; it exposes HID through IOKit, so a macOS port means writing
+a second backend for `m711pro/core/device.py` (most likely over `hidapi`, a C
+library — which would cost the core its zero-dependency property). Windows would
+need the same for its HID API. The protocol layer, `m711pro/core/protocol.py`,
+is pure logic and already portable; only the I/O module is tied to Linux.
+
+If you want to take that on, the seam is deliberate and small: `find_devices`,
+`_send_feature` and `_read_from` are the only functions that touch the kernel.
+
 ## Install
 
 From a checkout of this repository:
 
 ```bash
-pip install --user .          # core only, zero dependencies (tkinter UI)
+pip install --user .          # core only, zero dependencies
 pip install --user '.[gui]'   # with the Qt interface (PySide6)
 ```
 
@@ -98,6 +114,67 @@ active local session, rather than the `MODE="0666"` one-liner that would leave
 the device world-writable for every account on the machine. See
 [packaging/README.md](packaging/README.md) for the details and a fallback for
 systems without systemd-logind.
+
+### Per distribution
+
+The core needs nothing beyond Python. These commands only install the optional
+Qt interface from your package manager instead of pip — useful because a
+distribution PySide6 tends to integrate better with the system theme.
+
+**Arch, Manjaro, CachyOS, EndeavourOS**
+
+```bash
+sudo pacman -S --needed python python-pyside6
+git clone https://github.com/mateusands/open-m711pro && cd open-m711pro
+sudo sh packaging/install.sh
+python3 main.py
+```
+
+**Debian, Ubuntu, Linux Mint, Pop!_OS**
+
+```bash
+sudo apt install python3 python3-pip python3-pyside6.qtwidgets
+git clone https://github.com/mateusands/open-m711pro && cd open-m711pro
+sudo sh packaging/install.sh
+python3 main.py
+```
+
+Debian splits PySide6 into per-module packages, so the name may differ between
+releases; `pip install --user PySide6` always works as a fallback. If you plan to
+use the tkinter interface instead, Debian and Ubuntu do **not** ship tkinter with
+Python by default — install `python3-tk`.
+
+**Fedora, RHEL, Nobara**
+
+```bash
+sudo dnf install python3 python3-pyside6
+git clone https://github.com/mateusands/open-m711pro && cd open-m711pro
+sudo sh packaging/install.sh
+python3 main.py
+```
+
+**openSUSE**
+
+```bash
+sudo zypper install python3 python3-pyside6
+git clone https://github.com/mateusands/open-m711pro && cd open-m711pro
+sudo sh packaging/install.sh
+python3 main.py
+```
+
+**Anything else**
+
+```bash
+pip install --user 'PySide6>=6.5'
+git clone https://github.com/mateusands/open-m711pro && cd open-m711pro
+sudo sh packaging/install.sh
+python3 main.py
+```
+
+Package names were taken from each distribution's current repositories and are
+the part of this most likely to drift; if one is wrong on your system, `pip
+install --user PySide6` is the universal path, and a pull request fixing the
+name is welcome.
 
 ## Usage
 
