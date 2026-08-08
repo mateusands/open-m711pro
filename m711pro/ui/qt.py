@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
 from ..core import device, state, protocol
 
 ACCENT = "#19b8c8"
+BORDER_COLOR = "#2a2e38"
+PANEL_COLOR = "#171a21"
 
 QSS = f"""
 * {{ font-family: "Segoe UI", "Noto Sans", sans-serif; }}
@@ -66,6 +68,7 @@ QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
 QScrollBar::handle:vertical {{ background: #2a2e38; border-radius: 5px; min-height: 30px; }}
 QScrollBar::handle:vertical:hover {{ background: #3a3f4a; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QWidget[focused="true"] {{ background: #171a21; border-radius: 6px; }}
 QPushButton#swatch {{ border: 1px solid #2a2e38; border-radius: 4px; }}
 QLabel#statusbar {{ background: #191c24; color: #8b9098; padding: 7px 12px; }}
 """
@@ -176,9 +179,9 @@ class ColorWheel(QWidget):
 
 
 # ---------------------------------------------------------------------------
-EFFECTS = ["Steady", "Breathing", "Cycle", "Off",
-           "Audio visualiser (coming soon)"]
-COLOR_EFFECTS = {"Steady", "Breathing", "Cycle"}   # effects that use the chosen colour
+# Names come from the core so the two can never drift apart.
+COLOR_EFFECTS = set(device.COLOR_EFFECTS)
+EFFECTS = list(device.COLOR_EFFECTS) + [device.EFFECT_NAMES[protocol.EFFECT_OFF]]
 PRESETS = [(255, 0, 0), (255, 128, 0), (255, 255, 0), (0, 255, 0),
            (0, 255, 255), (0, 0, 255), (180, 0, 255), (255, 255, 255)]
 
@@ -277,9 +280,7 @@ class LightingPage(QWidget):
         self._refresh(r, g, b)
 
     def _send_fn(self):
-        return {"Fixo": device.send_color,
-                "Breathing": device.send_breathing,
-                "Ciclo": device.send_cycle}.get(self.effect.currentText())
+        return device.sender_for(self.effect.currentText())
 
     def _speed_byte(self):
         # slider 0% (slow) -> 100% (fast); a lower byte is faster (0xF0..0x08)
@@ -324,7 +325,7 @@ class LightingPage(QWidget):
         self.color_area.setVisible(has_color)
         self.no_color.setVisible(not has_color)
         self._speed_visible(eff)
-        if eff == "Desligado":
+        if eff == "Off":
             self.no_color.setText("Lighting is off.")
             self._send(device.send_off, "LED off")
         elif has_color:
@@ -360,9 +361,9 @@ class LightingPage(QWidget):
             self.speed.blockSignals(True)
             self.speed.setValue(spct)
             self.speed.blockSignals(False)
-        eff = st.get("effect", "Fixo")
+        eff = st.get("effect", "Steady")
         if eff not in EFFECTS:
-            eff = "Fixo"
+            eff = "Steady"
         self.effect.blockSignals(True)          # reflect without triggering a send
         self.effect.setCurrentText(eff)
         self.effect.blockSignals(False)
@@ -816,11 +817,96 @@ MEDIA_KEYS = [
     ("Volume down", protocol.MEDIA_VOL_DOWN),
 ]
 
-# Which table slot is which physical button. Everything else is unused on this
-# model — the slots exist, but no button on the mouse fires them.
+
+
+
+class MouseDiagram(QWidget):
+    """A top-down schematic of the mouse with the eight buttons numbered.
+
+    Drawn rather than shipped as an image: the official app's render is the
+    vendor's artwork and cannot go into a GPL repository. The button POSITIONS
+    are facts about the hardware, so the layout matches what the app shows.
+
+    Numbers are the ones the official app uses. The table index behind each one
+    is not the same number — buttons 6, 7 and 8 live at indices 10, 11 and 9 —
+    so the mapping lives here in one place.
+    """
+    selected = Signal(int)             # emits the TABLE INDEX, not the label
+
+    # label on the mouse -> (position in a 0..1 box, table index, what it is)
+    BUTTONS = {
+        1: ((0.30, 0.20), 0, "left click"),
+        2: ((0.70, 0.20), 1, "right click"),
+        3: ((0.50, 0.17), 2, "wheel"),
+        4: ((0.13, 0.45), 3, "side"),
+        5: ((0.13, 0.34), 4, "side"),
+        6: ((0.50, 0.38), 10, "top"),
+        7: ((0.50, 0.48), 11, "top"),
+        8: ((0.50, 0.58), 9, "top"),
+    }
+    R = 11                             # badge radius
+
+    def __init__(self):
+        super().__init__()
+        self.setMinimumSize(190, 250)
+        self.setCursor(Qt.PointingHandCursor)
+        self._active = None            # highlighted table index
+
+    def set_active(self, index):
+        self._active = index
+        self.update()
+
+    def _centre(self, label):
+        (fx, fy), _, _ = self.BUTTONS[label]
+        w, h = self.width(), self.height()
+        return QPointF(fx * w, fy * h)
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+
+        # body: a rounded shell, narrower at the front
+        body = QRectF(w * 0.18, h * 0.06, w * 0.64, h * 0.84)
+        p.setPen(QPen(QColor(BORDER_COLOR), 2))
+        p.setBrush(QBrush(QColor(PANEL_COLOR)))
+        p.drawRoundedRect(body, w * 0.30, h * 0.22)
+
+        # the split between the two main buttons, and the wheel slot
+        p.setPen(QPen(QColor(BORDER_COLOR), 1))
+        p.drawLine(QPointF(w * 0.5, h * 0.08), QPointF(w * 0.5, h * 0.30))
+        wheel = QRectF(w * 0.46, h * 0.11, w * 0.08, h * 0.10)
+        p.setBrush(QBrush(QColor(BORDER_COLOR)))
+        p.drawRoundedRect(wheel, 3, 3)
+
+        # side buttons sit on a small tab
+        p.setBrush(QBrush(QColor(PANEL_COLOR)))
+        p.drawRoundedRect(QRectF(w * 0.06, h * 0.28, w * 0.14, h * 0.23), 4, 4)
+
+        for label in self.BUTTONS:
+            centre = self._centre(label)
+            active = self.BUTTONS[label][1] == self._active
+            p.setBrush(QBrush(QColor(ACCENT if active else "#20242e")))
+            p.setPen(QPen(QColor(ACCENT if active else BORDER_COLOR), 2))
+            p.drawEllipse(centre, self.R, self.R)
+            p.setPen(QPen(QColor("#0b0d11" if active else "#e8eaed")))
+            p.drawText(QRectF(centre.x() - self.R, centre.y() - self.R,
+                              self.R * 2, self.R * 2),
+                       Qt.AlignCenter, str(label))
+        p.end()
+
+    def mousePressEvent(self, e):
+        for label, (_, index, _role) in self.BUTTONS.items():
+            if (e.position() - self._centre(label)).manhattanLength() <= self.R * 2:
+                self.selected.emit(index)
+                return
+
+
+# Derived from the diagram so the two can never disagree about which slot is
+# which button — the numbers on the mouse are not the table indices.
 PHYSICAL_BUTTONS = {
-    0: "left", 1: "right", 2: "middle", 3: "back", 4: "forward",
-    9: "behind wheel 1", 10: "behind wheel 2", 11: "behind wheel 3",
+    index: f"button {label} ({role})"
+    for label, (_, index, role) in MouseDiagram.BUTTONS.items()
 }
 
 
@@ -919,12 +1005,11 @@ class ButtonsPage(QWidget):
         root.addLayout(head)
 
         note = QLabel(
-            "The mouse has 8 physical buttons, but the table has 16 slots and the "
-            "whole table is rewritten on every change — so all 16 are shown. Known "
-            "so far: 0 left, 1 right, 2 middle, 3 back, 4 forward; 9, 10 and 11 are "
-            "the three buttons behind the wheel (those use the extended slots). The "
-            "rest are unused on this model: writing to them is harmless but changes "
-            "nothing you can press.")
+            "Click a number on the mouse to jump to its row. The numbers are the "
+            "ones the official app uses, and they are NOT the table indices — "
+            "buttons 6, 7 and 8 live at slots 10, 11 and 9. The table has 16 slots "
+            "and is rewritten whole on every change, so all of them are shown; the "
+            "ones marked unused have no button behind them on this model.")
         note.setObjectName("muted"); note.setWordWrap(True); root.addWidget(note)
 
         body = QWidget(); body.setObjectName("rowsBody")
@@ -939,13 +1024,33 @@ class ButtonsPage(QWidget):
 
         area = QScrollArea(); area.setObjectName("rows")
         area.setWidgetResizable(True); area.setFrameShape(QFrame.NoFrame)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         area.setWidget(body)
-        root.addWidget(area, 1)
+
+        # The diagram sits beside the rows: clicking a numbered button scrolls to
+        # and highlights its row, which is the whole point — the table index is
+        # not the number printed on the mouse.
+        self.diagram = MouseDiagram()
+        self.diagram.selected.connect(self._focus_index)
+        side = QVBoxLayout(); side.addWidget(self.diagram); side.addStretch()
+        split = QHBoxLayout(); split.setSpacing(16)
+        split.addLayout(side); split.addWidget(area, 1)
+        root.addLayout(split, 1)
+        self._area = area
 
         hint = QLabel(
             "An action this app cannot build is shown as its raw bytes and cannot "
             "be selected — the byte is preserved instead of being guessed at.")
         hint.setObjectName("muted"); hint.setWordWrap(True); root.addWidget(hint)
+
+    def _focus_index(self, index):
+        """Scroll to the row a diagram badge points at and highlight both."""
+        self.diagram.set_active(index)
+        row = self.rows[index]
+        self._area.ensureWidgetVisible(row)
+        for i, other in enumerate(self.rows):
+            other.setProperty("focused", i == index)
+            other.style().unpolish(other); other.style().polish(other)
 
     # -- loading (only the first time the page is shown: the read is slow) --
     def ensure_loaded(self):
@@ -1054,7 +1159,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("open-m711pro — Redragon M711 Pro")
-        self.resize(780, 620)      # 620 keeps most of the 16 button rows on screen
+        self.resize(940, 660)      # 620 keeps most of the 16 button rows on screen
 
         central = QWidget(); self.setCentralWidget(central)
         outer = QVBoxLayout(central); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)

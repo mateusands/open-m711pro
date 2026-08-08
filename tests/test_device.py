@@ -469,3 +469,23 @@ def test_stubbing_restores_the_originals():
         assert device.read_register is not originals[0]
     assert (device.read_register, device.send_packets,
             device.find_devices, state.save) == originals
+
+
+# --- Effect names: one source of truth --------------------------------------
+def test_every_colour_effect_has_a_sender():
+    """A name with no sender makes the UI silently send nothing.
+
+    That is exactly what happened once: the interface offered "Steady" while the
+    dispatch table still keyed on the old Portuguese name, so picking an effect
+    did nothing at all. Keeping the names and the senders in one module means a
+    rename cannot reintroduce it — and this test proves they line up.
+    """
+    for name in device.COLOR_EFFECTS:
+        assert device.sender_for(name) is not None, f"{name} has no sender"
+
+
+def test_colour_effect_names_are_the_ones_read_back():
+    # sender_for must accept exactly what read_led_state reports
+    reported = set(device.EFFECT_NAMES.values())
+    assert set(device.COLOR_EFFECTS) <= reported
+    assert device.sender_for("Off") is None          # Off has its own path

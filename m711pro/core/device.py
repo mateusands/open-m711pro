@@ -22,6 +22,19 @@ from .protocol import (build_color, build_breathing, build_cycle, build_off,
 from . import state
 
 EFFECT_NAMES = {0x00: "Cycle", 0x01: "Breathing", 0x02: "Steady", 0x04: "Off"}
+
+# Effects that take a colour, in the order a UI should offer them. Keeping the
+# names here — rather than repeating them in each interface — is what stops a
+# rename from silently breaking a dispatch: a mismatch used to make the combo
+# send nothing at all.
+COLOR_EFFECTS = ("Steady", "Breathing", "Cycle")
+
+
+def sender_for(effect):
+    """The send_* function for a colour effect name, or None if it takes none."""
+    return {"Steady": send_color,
+            "Breathing": send_breathing,
+            "Cycle": send_cycle}.get(effect)
 LED_ADDR = 0xA0
 
 VID = 0x25A7
@@ -178,25 +191,41 @@ def _read_from(dev_path, addr, length, timeout):
         os.close(fd)
 
 
+# Which node answered last. With the dongle and the cable both connected only
+# one of them replies, and probing the silent one costs a full timeout on every
+# read — enough to make a UI page take seconds to load. Remembering the last
+# good one turns that into a single wasted probe per session.
+_last_reader = None
+
+
 def read_register(addr, length=8, timeout=0.6):
     """Send the read request and capture the reply (interrupt IN, Report ID 09).
 
     Returns the report bytes, or None when no interface answered.
 
-    Tries EVERY interface present: with the dongle and the cable connected at
-    the same time it is the mouse node (FA08) that answers, not necessarily the
-    first in the list — pinning `devices[0]` made reads fail silently.
+    Tries EVERY interface present, the last one that answered first: with the
+    dongle and the cable connected at the same time it is the mouse node (FA08)
+    that answers, not necessarily the first in the list — pinning `devices[0]`
+    made reads fail silently.
     """
+    global _last_reader
     devices = find_devices()
     if not devices:
+        _last_reader = None
         raise DeviceNotFound("mouse not found")
-    for dev, _ in devices:
+    paths = [d for d, _ in devices]
+    if _last_reader in paths:                  # try the known-good node first
+        paths.remove(_last_reader)
+        paths.insert(0, _last_reader)
+    for dev in paths:
         try:
             reply = _read_from(dev, addr, length, timeout)
         except OSError:
             continue
         if reply:
+            _last_reader = dev
             return reply
+    _last_reader = None                        # nobody answered; probe again next time
     return None
 
 
