@@ -13,10 +13,12 @@ import fcntl
 
 from .protocol import (build_color, build_breathing, build_cycle, build_off,
                        build_commit, build_read, build_dpi_table_bytes,
-                       build_dpi_effect, byte_to_dpi, dpi_to_byte,
+                       build_dpi_effect, byte_to_dpi, dpi_to_byte, build_combo,
+                       build_dpi_colors, DPI_COLOR_ADDR,
                        SPEED_BREATHING, SPEED_CYCLE, DPI_ADDR, DPI_STAGES,
-                       DPI_EFFECT_ADDR, build_buttons, build_media,
-                       BUTTON_ADDR, BUTTON_COUNT, BTN_EXTENDED)
+                       DPI_EFFECT_ADDR, build_buttons, build_media, build_key,
+                       BUTTON_ADDR, BUTTON_COUNT, BTN_EXTENDED,
+                       build_polling, polling_from_byte, POLLING_ADDR)
 from . import state
 
 EFFECT_NAMES = {0x00: "Cycle", 0x01: "Breathing", 0x02: "Steady", 0x04: "Off"}
@@ -198,24 +200,45 @@ def read_register(addr, length=8, timeout=0.6):
     return None
 
 
-def read_dpi_bytes():
-    """Read the RAW bytes of the five DPI stages. Returns [b1..b5] or None.
+def _read_stage_records(base):
+    """The five 4-byte records of a stage table (DPI, DPI colours) at `base`.
 
-    Three reads in the same shapes the app uses to write: 0x0C (LEN 8, stages
-    1-2), 0x14 (LEN 8, stages 3-4) and 0x1C (LEN 4, stage 5).
-
-    It returns BYTES rather than DPI on purpose: changing one stage means
-    rewriting the other four EXACTLY as they were, and byte -> DPI -> byte is
-    not the identity above 0xBD.
+    Three reads in the same shapes the app uses to write: base (LEN 8, stages
+    1-2), base+8 (LEN 8, stages 3-4) and base+16 (LEN 4, stage 5). Returns the
+    five raw records, or None when any read went unanswered.
     """
     out = []
-    for addr, length in ((DPI_ADDR, 8), (DPI_ADDR + 8, 8), (DPI_ADDR + 16, 4)):
+    for addr, length in ((base, 8), (base + 8, 8), (base + 16, 4)):
         reply = read_register(addr, length)
         if not reply or len(reply) < 6 + length:
             return None
         data = reply[6:6 + length]
-        out += [data[i] for i in range(0, length, 4)]
+        out += [data[i:i + 4] for i in range(0, length, 4)]
     return out
+
+
+def read_dpi_axes():
+    """Read the RAW axis bytes of the five DPI stages. Returns [(x, y)...] or None.
+
+    An entry is `X Y 00 ck`: two INDEPENDENT axis bytes. read_dpi_bytes keeps
+    only X, which is lossless while the app keeps the axes equal but would drop
+    a table written with "XY Independent" on.
+    """
+    records = _read_stage_records(DPI_ADDR)
+    return None if records is None else [(r[0], r[1]) for r in records]
+
+
+def read_dpi_bytes():
+    """Read the RAW bytes of the five DPI stages. Returns [b1..b5] or None.
+
+    It returns BYTES rather than DPI on purpose: changing one stage means
+    rewriting the other four EXACTLY as they were, and byte -> DPI -> byte is
+    not the identity above 0xBD.
+
+    Only the X axis: see read_dpi_axes when both axes matter.
+    """
+    axes = read_dpi_axes()
+    return None if axes is None else [x for x, _ in axes]
 
 
 def read_dpi_table():
@@ -269,6 +292,42 @@ def send_dpi_all(dpi):
     return send_dpi_bytes([byte] * DPI_STAGES), byte_to_dpi(byte)
 
 
+def read_dpi_colors():
+    """Read the LED colour of each DPI stage. Returns five (r, g, b) or None.
+
+    Same three shapes as the DPI table, at the colour base address: 0x2C
+    (LEN 8, stages 1-2), 0x34 (LEN 8, stages 3-4) and 0x3C (LEN 4, stage 5).
+    """
+    records = _read_stage_records(DPI_COLOR_ADDR)
+    return None if records is None else [tuple(r[0:3]) for r in records]
+
+
+def send_dpi_colors(colors):
+    """Write the LED colour of all five DPI stages at once."""
+    return send_packets(build_dpi_colors(colors))
+
+
+def send_dpi_color(stage, rgb):
+    """Change ONE stage's colour (1 to 5), preserving the others byte for byte.
+
+    The register is written whole, so the current colours are read first. If
+    that read fails we abort rather than rewrite the other four stages with a
+    guess — the same discipline as send_dpi.
+
+    Returns (routes, colors) — the resulting five-colour table.
+    """
+    if not 1 <= stage <= DPI_STAGES:
+        raise ValueError(f"stage must be between 1 and {DPI_STAGES}")
+    colors = read_dpi_colors()
+    if colors is None:
+        raise DeviceNotFound(
+            "could not read the current DPI colours — without them the other "
+            "stages would be rewritten with a guess. Check the dongle and "
+            "try again.")
+    colors[stage - 1] = tuple(rgb)
+    return send_dpi_colors(colors), colors
+
+
 def read_buttons():
     """Read the 16 button records. Returns [(TYPE, P1, P2), ...] or None.
 
@@ -320,8 +379,53 @@ def send_media(index, usage):
         raise ValueError(f"button index must be between 0 and {BUTTON_COUNT - 1}")
     table = _current_button_table()
     table[index] = BTN_EXTENDED
-    routes = send_packets([build_media(index, usage)] + build_buttons(table))
+    routes = send_packets(build_media(index, usage) + build_buttons(table))
     return routes, table
+
+
+def send_key(index, usage):
+    """Assign a keyboard key to button `index`.
+
+    Mirrors send_media: the extended slot goes out first, the button table
+    second — the order the official app uses.
+    """
+    if not 0 <= index < BUTTON_COUNT:
+        raise ValueError(f"button index must be between 0 and {BUTTON_COUNT - 1}")
+    table = _current_button_table()
+    table[index] = BTN_EXTENDED
+    routes = send_packets(build_key(index, usage) + build_buttons(table))
+    return routes, table
+
+
+def send_combo(index, modifiers, usage):
+    """Assign a modifier + key combination (e.g. Ctrl+C) to button `index`."""
+    if not 0 <= index < BUTTON_COUNT:
+        raise ValueError(f"button index must be between 0 and {BUTTON_COUNT - 1}")
+    table = _current_button_table()
+    table[index] = BTN_EXTENDED
+    routes = send_packets(build_combo(index, modifiers, usage)
+                          + build_buttons(table))
+    return routes, table
+
+
+def read_polling():
+    """Read the USB polling rate. Returns (hz, raw_byte).
+
+    `hz` is None when the register holds a code we cannot decode — only
+    01/02/04/08 are known, and guessing a rate from an unknown byte would be
+    inventing a reading. `raw_byte` is None only when nothing answered, so the
+    caller can tell a silent device from an unexpected value.
+    """
+    reply = read_register(POLLING_ADDR, 2)
+    if not reply or len(reply) < 8:
+        return None, None
+    raw = reply[6]
+    return polling_from_byte(raw), raw
+
+
+def send_polling(hz):
+    """Set the USB polling rate (1000, 500, 250 or 125 Hz)."""
+    return send_packets([build_polling(hz)])
 
 
 def read_dpi_effect():

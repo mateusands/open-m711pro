@@ -1,5 +1,7 @@
 # open-m711pro
 
+[![tests](https://github.com/mateusands/open-m711pro/actions/workflows/tests.yml/badge.svg)](https://github.com/mateusands/open-m711pro/actions/workflows/tests.yml)
+
 An open-source driver and configuration tool for the **Redragon M711 Pro**
 gaming mouse on Linux, written in pure Python.
 
@@ -27,10 +29,14 @@ protocol family are used by the Redragon M913 Impact Elite.
 - **Buttons** — remap all 16 slots: mouse buttons, DPI up/down/cycle, fire key,
   three-click, RGB toggle, polling switch, disable
 - **Multimedia keys** — play/pause, next, previous, mute, stop, volume
+- **Keyboard keys and combinations** — `key:a`, `combo:ctrl+c`
 - **Reading the real state** back from the mouse, not just what this app wrote
 
-Not mapped yet: macros and keyboard combos, and a second LED zone at `0x0054`.
-The polling rate register is identified but not yet verified on this hardware.
+- **USB polling rate** — 1000 / 500 / 250 / 125 Hz
+
+Not mapped yet: macros and modifier combos. Keyboard keys are implemented but
+**experimental** (see below), and a second LED zone at `0x0054` is decoded by
+analogy with the M913 but not confirmed here.
 
 ## Requirements
 
@@ -38,41 +44,60 @@ The polling rate register is identified but not yet verified on this hardware.
 - The core is **pure stdlib**. The Qt interface needs `PySide6`; without it the
   app falls back to a tkinter UI.
 
-Grant access to the device with a udev rule:
+## Install
 
-```
-# /etc/udev/rules.d/99-m711pro.rules
-SUBSYSTEM=="hidraw", ATTRS{idVendor}=="25a7", MODE="0666"
-```
+From a checkout of this repository:
 
 ```bash
-sudo udevadm control --reload-rules && sudo udevadm trigger
+pip install --user .          # core only, zero dependencies (tkinter UI)
+pip install --user '.[gui]'   # with the Qt interface (PySide6)
 ```
+
+This gives you `open-m711pro` (CLI) and `open-m711pro-gui` (graphical
+interface); `python3 -m m711pro` works as well. Running from the source tree
+with `python3 main.py` keeps working and needs no install at all.
+
+Then grant access to the device and add the menu entry:
+
+```bash
+sudo sh packaging/install.sh
+```
+
+That installs a udev rule for both product IDs (`25a7:fa07` and `25a7:fa08`),
+reloads udev, and drops a `.desktop` file in the application menu. Replug the
+mouse afterwards. It is idempotent, and `--uninstall` reverses it.
+
+The rule uses `TAG+="uaccess"`, which hands the `hidraw` node to the user of the
+active local session, rather than the `MODE="0666"` one-liner that would leave
+the device world-writable for every account on the machine. See
+[packaging/README.md](packaging/README.md) for the details and a fallback for
+systems without systemd-logind.
 
 ## Usage
 
 Graphical interface:
 
 ```bash
-python3 main.py
+open-m711pro-gui       # installed
+python3 main.py        # from the source tree
 ```
 
-Command line:
+Command line (`python3 main.py` works the same way from the source tree):
 
 ```bash
-python3 main.py FF0000         # red (hex)
-python3 main.py 0 255 0        # green (R G B)
-python3 main.py blue           # colour by name
-python3 main.py off            # turn the LED off
+open-m711pro FF0000         # red (hex)
+open-m711pro 0 255 0        # green (R G B)
+open-m711pro blue           # colour by name
+open-m711pro off            # turn the LED off
 
-python3 main.py dpi            # show the five stages read from the mouse
-python3 main.py dpi 1600       # single DPI: apply it to all five stages
-python3 main.py dpi 3 4000     # stage 3 = 4000 DPI
-python3 main.py dpi-effect on  # DPI stage indicator LED
+open-m711pro dpi            # show the five stages read from the mouse
+open-m711pro dpi 1600       # single DPI: apply it to all five stages
+open-m711pro dpi 3 4000     # stage 3 = 4000 DPI
+open-m711pro dpi-effect on  # DPI stage indicator LED
 
-python3 main.py buttons        # list the 16 button slots
-python3 main.py button 1 middle
-python3 main.py button 9 media:mute
+open-m711pro buttons        # list the 16 button slots
+open-m711pro button 1 middle
+open-m711pro button 9 media:mute
 ```
 
 > DPI is stored as a single byte with a step of ~83, so the value shown is what
@@ -84,6 +109,7 @@ python3 main.py button 9 media:mute
 ```
 main.py                  entry point (GUI without args, CLI with args)
 m711pro/
+├── __main__.py          same dispatch for `python3 -m m711pro` + entry points
 ├── core/
 │   ├── protocol.py      packet builders + checksums — PURE LOGIC, no I/O
 │   ├── device.py        hidraw I/O (find_devices, send_*, read_*)
@@ -96,6 +122,7 @@ m711pro/
 └── data/colors.py       colour names and palette
 tools/                   read-only memory dumper, test runner
 tests/                   byte-match tests against real captures
+packaging/               udev rule, .desktop entry, install script
 ```
 
 Layer rules: `core/protocol.py` is pure logic and is what the byte-match tests
@@ -132,15 +159,46 @@ interrupt IN as Report ID `09` with the same layout.
 
 | Address | Contents |
 |---------|----------|
-| `0x0000` | USB polling rate: `01` 1000 Hz, `02` 500, `04` 250, `08` 125 (unverified here) |
+| `0x0000` | USB polling rate: `01` 1000 Hz, `02` 500, `04` 250, `08` 125 |
 | `0x0002` | number of enabled DPI stages (5) |
 | `0x000C`–`0x001F` | DPI table: 5 stages × 4 bytes (`X Y 00 ck`) |
 | `0x002C`–`0x003F` | per-stage LED colour: 5 × 4 bytes (`R G B ck`) |
 | `0x004C` | DPI Effect: `01` steady, `00` off |
 | `0x0060`–`0x009F` | button table: 16 records × 4 bytes (`TYPE P1 P2 ck`) |
-| `0x0054`–`0x005F` | second LED zone (logo?) — not decoded |
+| `0x0054`–`0x005F` | a second LED block — present, but see the note below |
 | `0x00A0` | LED: `EFFECT R G B SPEED BRIGHTNESS ck` |
-| `0x0100 + 0x20 × n` | extended slot for button *n* (multimedia, keyboard) |
+| `0x0100 + 0x20 x n` | extended slot for button *n* (multimedia, keyboard) |
+
+### Which physical button is which index
+
+The table has 16 slots; this mouse uses 8 of them, and **not in order**. Each row
+below was proven by a single-variable experiment — assigning one action through
+the official app and reading which record moved:
+
+| Button in the app | Table index |
+|-------------------|-------------|
+| 1-5 (left, right, middle, back, forward) | 0-4 |
+| 6 (behind the wheel, nearest) | 10 |
+| 7 (behind the wheel, middle) | 11 |
+| 8 (behind the wheel, furthest) | 9 |
+
+Indices 5-8 and 12-15 are not reachable from the official interface. Index 6
+holds `09 00 00` from the factory — an action type that appears in no table,
+ours or m913-ctl's. Since no button maps to it, the app can never be used to
+find out what it means. `read_buttons` returns raw bytes and `send_button`
+preserves every record it was not asked to change, so it survives untouched.
+
+### The second LED block (`0x0054`)
+
+`0x0054`-`0x005F` mirrors the M913's main LED register: colour, mode, brightness
+and speed, with the same record checksums. This mouse holds values byte-identical
+to m913-ctl's "rainbow" template.
+
+Writes are accepted and read back correctly, but **no visible change was ever
+observed** — not with a different colour, not switching the mode from rainbow to
+steady, not at full brightness. Either this model lacks the LED the block was
+designed for, or it is gated by something we have not found. It is documented
+here so nobody wastes time rediscovering it; the code does not touch it.
 
 ### DPI encoding
 
@@ -162,12 +220,35 @@ official app labels "16000".
 | `0x02` | DPI: `01` cycle, `02` up, `03` down | variant | — |
 | `0x04` | repeated click (fire key / three-click) | speed | clicks |
 | `0x05` | action lives in the extended slot | — | — |
-| `0x07` | RGB toggle | — | — |
-| `0x08` | polling rate switch | — | — |
+| `0x07` | polling rate switch | — | — |
+| `0x08` | RGB toggle | — | — |
 
-A multimedia key is stored in the extended slot as
-`02 82 <usage LE16> 42 <usage LE16> <ck>`, where `0x82`/`0x42` are the press and
-release events and the usage is a HID Consumer Page code.
+### Extended slot: an event list
+
+Actions that do not fit a 3-byte record live in a 32-byte slot at
+`0x0100 + 0x20 x index`, holding a list of input events:
+
+```
+<event count> [ <type> <code lo> <code hi> ] x count <checksum>
+```
+
+| Type | Event | Code |
+|------|-------|------|
+| `0x80` / `0x40` | modifier press / release | HID modifier bits (ctrl `0x01`, shift `0x02`, alt `0x04`, win `0x08`) |
+| `0x81` / `0x41` | key press / release | HID Keyboard Page usage |
+| `0x82` / `0x42` | multimedia press / release | HID Consumer Page usage (16-bit) |
+
+The first byte counts events, it does not name a type — which is why a plain key
+is two events and a combination is four. Confirmed on this hardware: assigning
+Ctrl+C through the official app produced
+
+```
+04 | 80 01 00 | 81 06 00 | 40 01 00 | 41 06 00 | c1
+     ctrl down   c down     ctrl up    c up
+```
+
+with `0x01` the left-control bit and `0x06` the keyboard usage for "c" — both
+standard HID values.
 
 ## Development
 
@@ -197,8 +278,10 @@ in the Redragon M913:
 
 Our DPI formula was independently validated against their code table. Where our
 hardware disagrees with them, we follow our own measurements and say so in the
-code — notably the `0x07`/`0x08` pair (RGB toggle vs polling switch) and the LED
-mode bytes, which genuinely differ between the M913 and the M711 Pro.
+code. One such disagreement has since been settled in *their* favour: we had
+`0x07`/`0x08` (RGB toggle vs polling switch) the wrong way round, which a
+single-variable experiment on this mouse corrected. The LED mode bytes do
+genuinely differ between the M913 and the M711 Pro.
 
 ## License
 

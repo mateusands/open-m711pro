@@ -1,0 +1,47 @@
+# udev rules for the Redragon M711 Pro (Compx 25a7) — open-m711pro
+#
+# Install to /etc/udev/rules.d/99-m711pro.rules, then:
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+# (packaging/install.sh does both for you)
+#
+# The mouse is configured through HID Feature Reports on its /dev/hidraw* node,
+# which is root-only by default. These rules hand access to the logged-in user.
+#
+# WHY uaccess AND NOT MODE="0666"
+#
+#   MODE="0666" makes the raw HID node world-readable AND world-writable for
+#   every account on the machine, permanently, whether or not anyone is sitting
+#   at the keyboard. A hidraw node for a mouse is not a harmless file: anything
+#   that can read it sees every button and movement the device reports, which is
+#   an input-sniffing channel, and anything that can write it can reprogram the
+#   device (this project remaps buttons to keystrokes — so a hostile writer can
+#   turn a mouse button into an arbitrary key). On a multi-user box, or with any
+#   sandboxed/daemon account, that is a real privilege leak.
+#
+#   TAG+="uaccess" is the modern systemd/logind mechanism: logind attaches an
+#   ACL granting access to the user of the *currently active local session*, and
+#   revokes it when that session ends or is switched away. Same convenience for
+#   a normal desktop, far smaller blast radius, no world-writable device node.
+#   This is what upstream projects (libratbag/piper, OpenRGB, solaar) settled on.
+#
+#   Requirement: systemd-logind (any mainstream desktop distro). If you are on a
+#   system without logind, comment the two uaccess rules out and uncomment the
+#   GROUP fallback at the bottom — it is still better than 0666 because access
+#   is limited to members of one group.
+#
+# The device appears under two product IDs: fa07 is the 2.4G receiver (dongle),
+# fa08 is the mouse itself over its own radio or over the cable. Both need the
+# rule, because which one shows up depends on how the mouse is connected.
+
+# 2.4G receiver (dongle)
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="25a7", ATTRS{idProduct}=="fa07", TAG+="uaccess"
+
+# Mouse (own radio or USB cable)
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="25a7", ATTRS{idProduct}=="fa08", TAG+="uaccess"
+
+# --- Fallback for systems without systemd-logind -----------------------------
+# Comment out the two rules above and uncomment these, then add yourself to the
+# group:  sudo usermod -aG plugdev $USER   (log out and back in)
+#
+#SUBSYSTEM=="hidraw", ATTRS{idVendor}=="25a7", ATTRS{idProduct}=="fa07", GROUP="plugdev", MODE="0660"
+#SUBSYSTEM=="hidraw", ATTRS{idVendor}=="25a7", ATTRS{idProduct}=="fa08", GROUP="plugdev", MODE="0660"

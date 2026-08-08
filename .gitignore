@@ -16,6 +16,10 @@ __pycache__/
 .venv/
 venv/
 
+# Build artefacts
+build/
+dist/
+
 # Editor / OS
 .vscode/
 .idea/

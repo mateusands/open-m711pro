@@ -14,7 +14,7 @@ from PySide6.QtGui import QPainter, QColor, QConicalGradient, QRadialGradient, Q
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout,
     QLabel, QComboBox, QSlider, QPushButton, QFrame, QStackedWidget, QColorDialog,
-    QSpinBox,
+    QSpinBox, QScrollArea,
 )
 
 from ..core import device, state, protocol
@@ -59,10 +59,45 @@ QSpinBox {{
     border-radius: 6px; padding: 5px 8px; min-width: 92px;
 }}
 QSpinBox:focus {{ border: 1px solid {ACCENT}; }}
+QComboBox#media {{ min-width: 120px; }}
+QComboBox:disabled {{ color: #5a5f68; border: 1px solid #23262e; }}
+QScrollArea#rows, QWidget#rowsBody {{ background: transparent; border: none; }}
+QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
+QScrollBar::handle:vertical {{ background: #2a2e38; border-radius: 5px; min-height: 30px; }}
+QScrollBar::handle:vertical:hover {{ background: #3a3f4a; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QPushButton#swatch {{ border: 1px solid #2a2e38; border-radius: 4px; }}
 QLabel#statusbar {{ background: #191c24; color: #8b9098; padding: 7px 12px; }}
-QFrame#chip {{ background: #171a21; border-radius: 6px; }}
-QFrame#chipActive {{ background: #20242e; border: 1px solid {ACCENT}; border-radius: 6px; }}
 """
+
+
+# ---------------------------------------------------------------------------
+# Combo helpers, shared by every page that mirrors a value read from the mouse.
+# A value we cannot interpret is displayed honestly and never becomes something
+# the user can send back.
+def _combo_trim(combo, base):
+    """Drop the temporary "cannot be built" entry, if there is one."""
+    while combo.count() > base:
+        combo.removeItem(combo.count() - 1)
+
+
+def _combo_pick(combo, base, index):
+    combo.blockSignals(True)
+    _combo_trim(combo, base)
+    combo.setCurrentIndex(index)
+    combo.blockSignals(False)
+
+
+def _combo_pick_raw(combo, base, text):
+    """Show `text` as the current entry, un-selectable from the list."""
+    combo.blockSignals(True)
+    _combo_trim(combo, base)
+    combo.addItem(text)
+    item = combo.model().item(base)
+    if item is not None:
+        item.setEnabled(False)
+    combo.setCurrentIndex(base)
+    combo.blockSignals(False)
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +181,6 @@ EFFECTS = ["Steady", "Breathing", "Cycle", "Off",
 COLOR_EFFECTS = {"Steady", "Breathing", "Cycle"}   # effects that use the chosen colour
 PRESETS = [(255, 0, 0), (255, 128, 0), (255, 255, 0), (0, 255, 0),
            (0, 255, 255), (0, 0, 255), (180, 0, 255), (255, 255, 255)]
-POLLING = [1000, 500, 250, 125]   # not mapped yet — the section is informational
 
 
 class LightingPage(QWidget):
@@ -301,7 +335,7 @@ class LightingPage(QWidget):
             self.status.emit(f"'{eff}' is not implemented yet.", False)
 
     def _pick_custom(self):
-        c = QColorDialog.getColor(parent=self, title="Escolha uma cor")
+        c = QColorDialog.getColor(parent=self, title="Pick a colour")
         if c.isValid():
             self._commit_rgb(c.red(), c.green(), c.blue())
 
@@ -329,7 +363,7 @@ class LightingPage(QWidget):
         eff = st.get("effect", "Fixo")
         if eff not in EFFECTS:
             eff = "Fixo"
-        self.effect.blockSignals(True)          # refletir sem disparar envio
+        self.effect.blockSignals(True)          # reflect without triggering a send
         self.effect.setCurrentText(eff)
         self.effect.blockSignals(False)
         has_color = eff in COLOR_EFFECTS
@@ -368,19 +402,38 @@ class DpiRow(QWidget):
     value the hardware will actually store.
     """
     edited = Signal()          # the user confirmed a value -> safe to send
+    color_clicked = Signal()   # the stage swatch was clicked
 
-    def __init__(self, label):
+    def __init__(self, label, with_color=False):
         super().__init__()
         lay = QHBoxLayout(self); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(10)
         if label:
             lb = QLabel(label); lb.setObjectName("muted"); lb.setMinimumWidth(58)
             lay.addWidget(lb)
+
+        # Per-stage LED colour: the mouse shows it to indicate the active stage.
+        self.color = None
+        if with_color:
+            self.color = QPushButton()
+            self.color.setObjectName("swatch")
+            self.color.setFixedSize(22, 22)
+            self.color.setToolTip("Stage colour — the LED shows it when this "
+                                  "stage is active")
+            self.color.clicked.connect(self.color_clicked)
+            lay.addWidget(self.color)
+
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setRange(0, protocol.DPI_BYTE_MAX)
         self.spin = DpiSpinBox()
         self.spin.setRange(protocol.DPI_MIN, protocol.DPI_MAX)
         self.spin.setSuffix(" DPI")
-        lay.addWidget(self.slider, 1); lay.addWidget(self.spin)
+        # Y axis, hidden unless the user asks for independent axes.
+        self.spin_y = DpiSpinBox()
+        self.spin_y.setRange(protocol.DPI_MIN, protocol.DPI_MAX)
+        self.spin_y.setPrefix("Y "); self.spin_y.setSuffix(" DPI")
+        self.spin_y.setVisible(False)
+        self.spin_y.editingFinished.connect(self.edited)
+        lay.addWidget(self.slider, 1); lay.addWidget(self.spin); lay.addWidget(self.spin_y)
 
         self.slider.valueChanged.connect(
             lambda v: self._set_spin(protocol.byte_to_dpi(v)))
@@ -391,7 +444,9 @@ class DpiRow(QWidget):
     def _from_spin(self):
         b = protocol.dpi_to_byte(self.spin.value())
         self._set_slider(b)
-        self._set_spin(protocol.byte_to_dpi(b))    # ecoa o valor quantizado
+        self._set_spin(protocol.byte_to_dpi(b))    # echo the quantised value
+        if not self.spin_y.isVisible():
+            self._set_spin_y(protocol.byte_to_dpi(b))
         self.edited.emit()
 
     def _set_spin(self, dpi):
@@ -404,21 +459,48 @@ class DpiRow(QWidget):
         self.slider.setValue(b)
         self.slider.blockSignals(False)
 
-    def set_byte(self, b):
+    def _set_spin_y(self, dpi):
+        self.spin_y.blockSignals(True)
+        self.spin_y.setValue(dpi)
+        self.spin_y.blockSignals(False)
+
+    def set_byte(self, b, y=None):
+        """Show a stage. `y` is the Y-axis byte when it differs from X."""
         self._set_slider(b)
         self._set_spin(protocol.byte_to_dpi(b))
+        self._set_spin_y(protocol.byte_to_dpi(b if y is None else y))
 
     def byte(self):
         return self.slider.value()
 
+    def axes(self):
+        """(x, y) register bytes — equal unless the Y field is showing."""
+        x = self.slider.value()
+        if not self.spin_y.isVisible():
+            return x, x
+        return x, protocol.dpi_to_byte(self.spin_y.value())
+
+    def show_y(self, flag):
+        self.spin_y.setVisible(flag)
+
+    def set_color(self, rgb):
+        if self.color is None:
+            return
+        self.color.setStyleSheet(
+            f"background:#{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X};"
+            "border:1px solid #2a2e38; border-radius:4px;")
+
 
 class DpiPage(QWidget):
-    """DPI page wired to the hardware (register 0x000C).
+    """DPI page wired to the hardware (registers 0x000C, 0x004C and 0x0000).
 
     Two modes, chosen by the user and persisted in state.json:
     - "Single DPI": the typed value goes to all five stages, so the mouse's DPI
       button cycles without changing the sensitivity.
     - "5 stages": edit each stage separately.
+
+    It also carries the DPI stage indicator (0x004C) and the USB polling rate
+    (0x0000), both read back from the mouse before their control comes alive.
     """
     status = Signal(str, bool)
     MODES = [("single", "Single DPI"), ("stages", "5 stages")]
@@ -427,7 +509,14 @@ class DpiPage(QWidget):
         super().__init__()
         self.setObjectName("page")
         self._loaded = False
-        self._raw = [0] * protocol.DPI_STAGES   # bytes lidos, preservados intactos
+        self._raw = [0] * protocol.DPI_STAGES   # bytes read, preserved untouched
+        self._axes = [(0, 0)] * protocol.DPI_STAGES
+        self._colors = [(0, 0, 0)] * protocol.DPI_STAGES
+        # last rate READ BACK from the mouse (None = a code we cannot decode) and
+        # the register byte behind it (None = nothing answered)
+        self._polling_hz = None
+        self._polling_raw = None
+        self._polling_rates = sorted(protocol.POLLING_RATES, reverse=True)
         root = QVBoxLayout(self); root.setContentsMargins(26, 22, 26, 22); root.setSpacing(12)
 
         head = QHBoxLayout()
@@ -464,9 +553,16 @@ class DpiPage(QWidget):
         gb = QVBoxLayout(self.stages_box); gb.setContentsMargins(0, 0, 0, 0); gb.setSpacing(7)
         self.rows = []
         for i in range(protocol.DPI_STAGES):
-            row = DpiRow(f"  {i + 1}")
+            row = DpiRow(f"  {i + 1}", with_color=True)
             row.edited.connect(lambda k=i: self._commit_stage(k))
+            row.color_clicked.connect(lambda k=i: self._pick_color(k))
             gb.addWidget(row); self.rows.append(row)
+        self.xy = QPushButton("Independent X / Y axes")
+        self.xy.setObjectName("action"); self.xy.setCheckable(True)
+        self.xy.setEnabled(False)
+        self.xy.toggled.connect(self._show_xy)
+        xr = QHBoxLayout(); xr.addWidget(self.xy); xr.addStretch()
+        gb.addLayout(xr)
         root.addWidget(self.stages_box)
 
         hint = QLabel(
@@ -483,17 +579,22 @@ class DpiPage(QWidget):
         er = QHBoxLayout(); er.addWidget(self.effect_btn); er.addStretch()
         root.addLayout(er)
 
-        root.addWidget(self._muted("POLLING RATE (Hz)"))
-        pol = QHBoxLayout(); pol.setSpacing(6)
-        for hz in POLLING:
-            pol.addWidget(self._chip(str(hz), hz == 1000))
-        pol.addStretch(); root.addLayout(pol)
-        nm = QLabel("Polling rate is not mapped yet — no capture confirms it.")
-        nm.setStyleSheet(f"color:{ACCENT};"); root.addWidget(nm)
+        # --- USB polling rate (register 0x0000) ---
+        # The choices come from protocol.POLLING_RATES so the page cannot drift
+        # from the rates the protocol can actually build.
+        pol = QHBoxLayout()
+        pol.addWidget(self._muted("POLLING RATE (Hz)")); pol.addSpacing(8)
+        self.polling = QComboBox()
+        for hz in self._polling_rates:
+            self.polling.addItem(f"{hz} Hz")
+        self.polling.setEnabled(False)          # only a successful read wakes it
+        self.polling.currentIndexChanged.connect(self._on_polling)
+        pol.addWidget(self.polling); pol.addStretch()
+        root.addLayout(pol)
         root.addStretch()
         self._show_mode()
 
-    # -- modo ---------------------------------------------------------------
+    # -- mode ---------------------------------------------------------------
     def _mode_key(self):
         return self.MODES[self.mode.currentIndex()][0]
 
@@ -527,8 +628,11 @@ class DpiPage(QWidget):
 
     def _reload(self):
         try:
-            raw = device.read_dpi_bytes()
+            axes = device.read_dpi_axes()
+            raw = None if axes is None else [x for x, _ in axes]
+            colors = device.read_dpi_colors()
             eff = device.read_dpi_effect()
+            hz, code = device.read_polling()
         except device.DeviceNotFound as exc:
             self._enable(False); self.status.emit(f"Error: {exc}", True)
             return
@@ -537,35 +641,99 @@ class DpiPage(QWidget):
             self.status.emit("Could not read the DPI — did the mouse answer?", True)
             return
         self._raw = list(raw)
-        for row, b in zip(self.rows, raw):
-            row.set_byte(b)
+        self._axes = list(axes)
+        if colors:
+            self._colors = list(colors)
+        for row, (x, y), color in zip(self.rows, self._axes, self._colors):
+            row.set_byte(x, y)
+            row.set_color(color)
         self.single.set_byte(raw[0])
         self._enable(True)
+        # Show the Y fields when the mouse already holds different axes.
+        self.xy.setChecked(any(x != y for x, y in self._axes))
         if eff is not None:
             self._show_effect(eff[0])
+        self._show_polling(hz, code)
         self._loaded = True
         self._update_single_note()
-        self.status.emit("DPI read from the mouse.", False)
+        if code is None:
+            self.status.emit("DPI read from the mouse — the polling rate did "
+                             "not answer.", True)
+        else:
+            self.status.emit("DPI read from the mouse.", False)
 
     def _enable(self, flag):
         for row in self.rows:
             row.setEnabled(flag)
+        self.xy.setEnabled(flag)
         self.single.setEnabled(flag)
         self.effect_btn.setEnabled(flag)
+        if not flag:
+            self.polling.setEnabled(False)   # only its own read wakes it again
 
     def _show_effect(self, on):
         self.effect_btn.setChecked(on)
         self.effect_btn.setText("On" if on else "Off")
 
-    # -- envio --------------------------------------------------------------
-    def _send(self, raw, msg):
-        """Write the table, adopting the new bytes only if the send succeeded."""
+    def _show_polling(self, hz, code):
+        """Make the combo reflect the rate we believe the register holds.
+
+        A code we cannot decode is shown as its raw byte and cannot be selected
+        — the value is never silently rewritten into one we do understand.
+        """
+        self._polling_hz, self._polling_raw = hz, code
+        self.polling.setEnabled(code is not None)
+        base = len(self._polling_rates)
+        if hz in self._polling_rates:
+            _combo_pick(self.polling, base, self._polling_rates.index(hz))
+        else:
+            _combo_pick_raw(self.polling, base, "no answer" if code is None
+                            else f"unknown (0x{code:02x})")
+
+    # -- per-stage colour and independent axes --------------------------------
+    def _show_xy(self, flag):
+        """Reveal the Y field on every stage row.
+
+        Toggling writes nothing by itself — the mouse keeps whatever it holds
+        until a stage is actually edited. From then on the rule follows the
+        toggle: with it off the axes are linked, so editing a stage sets Y = X;
+        with it on each axis carries its own value. Rewriting the table the
+        moment the toggle moves would be a write nobody asked for.
+        """
+        for row in self.rows:
+            row.show_y(flag)
+
+    def _pick_color(self, k):
+        """Pick the LED colour the mouse shows while stage `k` is active."""
+        chosen = QColorDialog.getColor(QColor(*self._colors[k]), self,
+                                       f"Stage {k + 1} colour")
+        if not chosen.isValid():
+            return
+        rgb = (chosen.red(), chosen.green(), chosen.blue())
         try:
-            vias = device.send_dpi_bytes(raw)
+            _, colors = device.send_dpi_color(k + 1, rgb)
+        except (device.DeviceNotFound, ValueError) as exc:
+            self.status.emit(f"Error: {exc}", True)
+            return
+        self._colors = [tuple(c) for c in colors]
+        self.rows[k].set_color(rgb)
+        self.status.emit(f"Stage {k + 1} colour = "
+                         f"#{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}", False)
+
+    # -- sending --------------------------------------------------------------
+    def _send(self, entries, msg):
+        """Write the table, adopting the new bytes only if the send succeeded.
+
+        `entries` may hold a single byte per stage or an (x, y) pair; the
+        protocol layer normalises both.
+        """
+        try:
+            vias = device.send_dpi_bytes(entries)
         except device.DeviceNotFound as exc:
             self.status.emit(f"Error: {exc}", True)
             return
-        self._raw = list(raw)
+        self._axes = [protocol.axis_pair(e) for e in entries]
+        self._raw = [x for x, _ in self._axes]
         self._update_single_note()
         self.status.emit(f"{msg} — via {', '.join(vias)}", False)
 
@@ -577,9 +745,14 @@ class DpiPage(QWidget):
     def _commit_stage(self, k):
         # start from the bytes we READ, not from the sliders: a stage the slider
         # cannot represent then stays exactly as it was
-        raw = list(self._raw)
-        raw[k] = self.rows[k].byte()
-        self._send(raw, f"Stage {k + 1} = {protocol.byte_to_dpi(raw[k])} DPI")
+        entries = list(self._axes)
+        entries[k] = self.rows[k].axes()
+        x, y = entries[k]
+        label = (f"Stage {k + 1} = {protocol.byte_to_dpi(x)} DPI"
+                 if x == y else
+                 f"Stage {k + 1} = X {protocol.byte_to_dpi(x)} / "
+                 f"Y {protocol.byte_to_dpi(y)} DPI")
+        self._send(entries, label)
 
     def _toggle_effect(self):
         on = self.effect_btn.isChecked()
@@ -592,24 +765,296 @@ class DpiPage(QWidget):
             self.effect_btn.setChecked(not on)      # desfaz o toggle visual
             self.status.emit(f"Error: {exc}", True)
 
+    def _on_polling(self, index):
+        if index >= len(self._polling_rates):    # the raw entry — never sent
+            return
+        hz = self._polling_rates[index]
+        try:
+            routes = device.send_polling(hz)
+        except (device.DeviceNotFound, ValueError) as exc:
+            # undo the visual change: back to the last rate we actually read
+            self._show_polling(self._polling_hz, self._polling_raw)
+            self.status.emit(f"Error: {exc}", True)
+            return
+        # adopt the new rate; this also drops the raw entry, if there was one
+        self._show_polling(hz, protocol.POLLING_RATES[hz])
+        self.status.emit(f"Polling rate = {hz} Hz — via {', '.join(routes)}", False)
+
     @staticmethod
     def _muted(text):
         lb = QLabel(text); lb.setObjectName("muted"); return lb
 
+
+# ---------------------------------------------------------------------------
+# Actions offered by the combo. Only actions we can BUILD are listed here; an
+# action read from the mouse that is not on this list is shown as-is and cannot
+# be re-selected (see ButtonRow.set_action).
+BUTTON_ACTIONS = [
+    ("Left click", protocol.btn_mouse(protocol.MOUSE_LEFT)),
+    ("Right click", protocol.btn_mouse(protocol.MOUSE_RIGHT)),
+    ("Middle click", protocol.btn_mouse(protocol.MOUSE_MIDDLE)),
+    ("Back", protocol.btn_mouse(protocol.MOUSE_BACK)),
+    ("Forward", protocol.btn_mouse(protocol.MOUSE_FORWARD)),
+    ("DPI up", protocol.btn_dpi_up()),
+    ("DPI down", protocol.btn_dpi_down()),
+    ("DPI cycle", protocol.btn_dpi_cycle()),
+    ("Three click", protocol.btn_three_click()),
+    ("Fire key", protocol.btn_fire()),
+    ("RGB on/off", protocol.btn_rgb_toggle()),
+    ("Polling rate switch", protocol.btn_polling_switch()),
+    ("Multimedia key", protocol.BTN_EXTENDED),
+    ("Disabled", protocol.BTN_NONE),
+]
+
+MEDIA_KEYS = [
+    ("Play / pause", protocol.MEDIA_PLAY_PAUSE),
+    ("Next track", protocol.MEDIA_NEXT),
+    ("Previous track", protocol.MEDIA_PREVIOUS),
+    ("Mute", protocol.MEDIA_MUTE),
+    ("Stop", protocol.MEDIA_STOP),
+    ("Volume up", protocol.MEDIA_VOL_UP),
+    ("Volume down", protocol.MEDIA_VOL_DOWN),
+]
+
+# Which table slot is which physical button. Everything else is unused on this
+# model — the slots exist, but no button on the mouse fires them.
+PHYSICAL_BUTTONS = {
+    0: "left", 1: "right", 2: "middle", 3: "back", 4: "forward",
+    9: "behind wheel 1", 10: "behind wheel 2", 11: "behind wheel 3",
+}
+
+
+class ButtonRow(QWidget):
+    """One slot of the button table: a label, an action combo and, when the
+    action lives in an extended slot, a multimedia combo next to it."""
+    action_edited = Signal(int)     # emits the slot index
+    media_edited = Signal(int)
+
+    def __init__(self, index):
+        super().__init__()
+        self.index = index
+        lay = QHBoxLayout(self); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(10)
+
+        name = PHYSICAL_BUTTONS.get(index)
+        lb = QLabel(f"{index:2d}  {name}" if name else f"{index:2d}  unused")
+        lb.setObjectName("" if name else "muted")
+        lb.setMinimumWidth(112)
+        lay.addWidget(lb)
+
+        self.action = QComboBox()
+        for label, _ in BUTTON_ACTIONS:
+            self.action.addItem(label)
+        self.action.currentIndexChanged.connect(
+            lambda _idx: self.action_edited.emit(self.index))
+        lay.addWidget(self.action, 1)
+
+        self.media = QComboBox(); self.media.setObjectName("media")
+        for label, _ in MEDIA_KEYS:
+            self.media.addItem(label)
+        self.media.currentIndexChanged.connect(
+            lambda _idx: self.media_edited.emit(self.index))
+        self.media.hide()
+        lay.addWidget(self.media, 1)
+
+        self.setEnabled(False)
+
+    # -- state --------------------------------------------------------------
+    def set_action(self, action):
+        action = tuple(action)
+        for i, (_, known) in enumerate(BUTTON_ACTIONS):
+            if known == action:
+                _combo_pick(self.action, len(BUTTON_ACTIONS), i)
+                return
+        _combo_pick_raw(self.action, len(BUTTON_ACTIONS),
+                        "unknown ({:02x} {:02x} {:02x})".format(*action))
+
+    def current_action(self):
+        """The action tuple to send, or None when the entry is a raw byte dump."""
+        i = self.action.currentIndex()
+        return BUTTON_ACTIONS[i][1] if i < len(BUTTON_ACTIONS) else None
+
+    def set_media(self, usage):
+        for i, (_, known) in enumerate(MEDIA_KEYS):
+            if known == usage:
+                _combo_pick(self.media, len(MEDIA_KEYS), i)
+                return
+        text = ("unknown slot" if usage is None
+                else f"unknown (usage {usage:04x})")
+        _combo_pick_raw(self.media, len(MEDIA_KEYS), text)
+
+    def current_media(self):
+        i = self.media.currentIndex()
+        return MEDIA_KEYS[i][1] if i < len(MEDIA_KEYS) else None
+
+    def pick_first_media(self):
+        _combo_pick(self.media, len(MEDIA_KEYS), 0)
+
+    def show_media(self, flag):
+        self.media.setVisible(flag)
+
+
+class ButtonsPage(QWidget):
+    """Button page wired to the hardware (table at 0x0060, extended slots at 0x0100).
+
+    The table is written whole on every change, so the fifteen buttons we are
+    not touching must go back exactly as they were: `device.send_button` re-reads
+    the table before writing, and this page never turns a byte it cannot
+    interpret into one it can (an unrecognised action stays un-selectable).
+    """
+    status = Signal(str, bool)
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("page")
+        self._loaded = False
+        self._table = [protocol.BTN_NONE] * protocol.BUTTON_COUNT
+        self._media = {}                 # index -> usage read from the ext slot
+        root = QVBoxLayout(self); root.setContentsMargins(22, 22, 22, 22); root.setSpacing(12)
+
+        head = QHBoxLayout()
+        t = QLabel("BUTTONS"); t.setObjectName("title")
+        head.addWidget(t); head.addStretch()
+        btn = QPushButton("Read from mouse"); btn.setObjectName("action")
+        btn.clicked.connect(self._reload); head.addWidget(btn)
+        root.addLayout(head)
+
+        note = QLabel(
+            "The mouse has 8 physical buttons, but the table has 16 slots and the "
+            "whole table is rewritten on every change — so all 16 are shown. Known "
+            "so far: 0 left, 1 right, 2 middle, 3 back, 4 forward; 9, 10 and 11 are "
+            "the three buttons behind the wheel (those use the extended slots). The "
+            "rest are unused on this model: writing to them is harmless but changes "
+            "nothing you can press.")
+        note.setObjectName("muted"); note.setWordWrap(True); root.addWidget(note)
+
+        body = QWidget(); body.setObjectName("rowsBody")
+        rows = QVBoxLayout(body); rows.setContentsMargins(0, 0, 8, 0); rows.setSpacing(6)
+        self.rows = []
+        for i in range(protocol.BUTTON_COUNT):
+            row = ButtonRow(i)
+            row.action_edited.connect(self._on_action)
+            row.media_edited.connect(self._on_media)
+            rows.addWidget(row); self.rows.append(row)
+        rows.addStretch()
+
+        area = QScrollArea(); area.setObjectName("rows")
+        area.setWidgetResizable(True); area.setFrameShape(QFrame.NoFrame)
+        area.setWidget(body)
+        root.addWidget(area, 1)
+
+        hint = QLabel(
+            "An action this app cannot build is shown as its raw bytes and cannot "
+            "be selected — the byte is preserved instead of being guessed at.")
+        hint.setObjectName("muted"); hint.setWordWrap(True); root.addWidget(hint)
+
+    # -- loading (only the first time the page is shown: the read is slow) --
+    def ensure_loaded(self):
+        if not self._loaded:
+            self._reload()
+
+    def _reload(self):
+        try:
+            table = device.read_buttons()
+        except device.DeviceNotFound as exc:
+            self._enable(False); self.status.emit(f"Error: {exc}", True)
+            return
+        if table is None:
+            self._enable(False)
+            self.status.emit("Could not read the buttons — did the mouse answer?", True)
+            return
+        self._table = [tuple(a) for a in table]
+        self._media = {}
+        for i, action in enumerate(self._table):
+            extended = action == protocol.BTN_EXTENDED
+            if extended:
+                self._media[i] = self._read_media(i)
+            self._show(i)
+        self._enable(True)
+        self._loaded = True
+        self.status.emit("Buttons read from the mouse.", False)
+
     @staticmethod
-    def _chip(text, active):
-        f = QFrame(); f.setObjectName("chipActive" if active else "chip")
-        lay = QVBoxLayout(f); lay.setContentsMargins(16, 9, 16, 9)
-        lb = QLabel(text); lb.setStyleSheet(
-            f"color:{ACCENT if active else '#3a3e47'}; font-weight:{'700' if active else '400'};")
-        lay.addWidget(lb); return f
+    def _read_media(index):
+        """The multimedia usage stored in the extended slot, or None.
+
+        None also means "a slot we do not decode" (a keyboard combo or a macro),
+        which the row then shows as unknown.
+        """
+        try:
+            reply = device.read_register(protocol.ext_slot_addr(index), 8)
+        except (device.DeviceNotFound, OSError):
+            return None
+        if not reply or len(reply) < 14:
+            return None
+        data = reply[6:14]
+        if data[0] != 0x02 or data[1] != protocol.EVENT_MEDIA_DOWN:
+            return None
+        return data[2] | (data[3] << 8)
+
+    def _show(self, index):
+        """Make row `index` reflect the state we believe the hardware holds."""
+        row = self.rows[index]
+        action = self._table[index]
+        row.set_action(action)
+        extended = action == protocol.BTN_EXTENDED
+        if extended:
+            row.set_media(self._media.get(index))
+        row.show_media(extended)
+
+    def _enable(self, flag):
+        for row in self.rows:
+            row.setEnabled(flag)
+
+    # -- sending ------------------------------------------------------------
+    def _on_action(self, index):
+        row = self.rows[index]
+        action = row.current_action()
+        if action is None:                       # a raw byte entry — never sent
+            return
+        if action == protocol.BTN_EXTENDED:
+            if row.current_media() is None:
+                row.pick_first_media()           # an explicit choice needs a key
+            self._send_media(index)
+            return
+        label = row.action.currentText()
+        try:
+            routes, table = device.send_button(index, action)
+        except (device.DeviceNotFound, ValueError) as exc:
+            self._show(index)                    # undo the visual change
+            self.status.emit(f"Error: {exc}", True)
+            return
+        self._table = [tuple(a) for a in table]
+        self._media.pop(index, None)
+        row.show_media(False)
+        self.status.emit(f"Button {index} = {label} — via {', '.join(routes)}", False)
+
+    def _on_media(self, index):
+        self._send_media(index)
+
+    def _send_media(self, index):
+        row = self.rows[index]
+        usage = row.current_media()
+        if usage is None:                        # a raw slot dump — never sent
+            return
+        label = row.media.currentText()
+        try:
+            routes, table = device.send_media(index, usage)
+        except (device.DeviceNotFound, ValueError) as exc:
+            self._show(index)                    # undo the visual change
+            self.status.emit(f"Error: {exc}", True)
+            return
+        self._table = [tuple(a) for a in table]
+        self._media[index] = usage
+        row.show_media(True)
+        self.status.emit(f"Button {index} = media '{label}'"
+                         f" — via {', '.join(routes)}", False)
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("open-m711pro — Redragon M711 Pro")
-        self.resize(760, 500)
+        self.resize(780, 620)      # 620 keeps most of the 16 button rows on screen
 
         central = QWidget(); self.setCentralWidget(central)
         outer = QVBoxLayout(central); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
@@ -627,9 +1072,11 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.lighting)
         self.dpi = DpiPage(); self.dpi.status.connect(self._status)
         self.stack.addWidget(self.dpi)
+        self.buttons = ButtonsPage(); self.buttons.status.connect(self._status)
+        self.stack.addWidget(self.buttons)
 
         self.nav_btns = []
-        for i, name in enumerate(["Lighting", "Sensitivity (DPI)"]):
+        for i, name in enumerate(["Lighting", "Sensitivity (DPI)", "Buttons"]):
             b = QPushButton(name); b.setObjectName("nav"); b.setCheckable(True)
             b.clicked.connect(lambda _=False, idx=i: self._go(idx))
             sl.addWidget(b); self.nav_btns.append(b)
@@ -647,8 +1094,11 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(idx)
         for i, b in enumerate(self.nav_btns):
             b.setChecked(i == idx)
-        if self.stack.currentWidget() is self.dpi:
+        current = self.stack.currentWidget()
+        if current is self.dpi:
             self.dpi.ensure_loaded()      # the read is slow; only when the tab opens
+        elif current is self.buttons:
+            self.buttons.ensure_loaded()
 
     def _status(self, msg, is_error):
         color = "#ff6b6b" if is_error else "#8b9098"
