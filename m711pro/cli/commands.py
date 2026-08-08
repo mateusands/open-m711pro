@@ -19,12 +19,32 @@ Usage:
     python3 main.py button 9 media:mute
     python3 main.py button 9 key:a
 """
+import os
 import sys
 
 from ..core import device
 from ..core import protocol
 from ..data.colors import NAMED
 from ..data.hid_keys import KEYS, MODIFIERS
+
+def _prog():
+    """How the user actually invoked us, so the help text matches.
+
+    Installed the entry point is `open-m711pro`; from a checkout it is
+    `python3 main.py`. Printing the wrong one sends people down a dead end.
+    """
+    name = os.path.basename(sys.argv[0] or "")
+    if name == "main.py":
+        return "python3 main.py"                 # running from a checkout
+    if name.startswith("open-m711pro"):
+        return name                              # installed entry point
+    # Anything else — `python -m`, a test runner, an embedding host — has an
+    # argv[0] that would only mislead. Fall back to the canonical command.
+    return "open-m711pro"
+
+
+PROG = _prog()
+USAGE = __doc__.replace("python3 main.py", PROG)
 
 OFF_WORDS = {'off', 'desligar', 'desliga', 'apagar'}
 ON_WORDS = {'on', 'ligar', 'liga', 'ligado'}
@@ -47,12 +67,12 @@ def parse_action(argv):
                 pass          # six characters, but not hex — fall through to usage
     if len(argv) == 3:
         return 'color', tuple(max(0, min(255, int(x))) for x in argv)
-    raise SystemExit(__doc__)
+    raise SystemExit(USAGE)
 
 
-DPI_USAGE = ("Usage: main.py dpi                  # show the stages\n"
-             "       main.py dpi <value>         # single DPI (all five stages)\n"
-             "       main.py dpi <stage> <value> # change one stage")
+DPI_USAGE = ("Usage: " + PROG + " dpi                  # show the stages\n"
+             "       " + PROG + " dpi <value>         # single DPI (all five stages)\n"
+             "       " + PROG + " dpi <stage> <value> # change one stage")
 
 
 def _cmd_dpi(argv):
@@ -93,14 +113,14 @@ def _cmd_dpi(argv):
 
 def _cmd_dpi_effect(argv):
     if len(argv) != 1 or argv[0].lower() not in ON_WORDS | OFF_WORDS:
-        raise SystemExit("Usage: main.py dpi-effect on|off")
+        raise SystemExit("Usage: " + PROG + " dpi-effect on|off")
     on = argv[0].lower() in ON_WORDS
     routes = device.send_dpi_effect(on)
     print(f"DPI Effect {'on' if on else 'off'} (via {', '.join(routes)})")
 
 
-POLLING_USAGE = ("Usage: main.py polling          # show the current rate\n"
-                 "       main.py polling <hz>    # "
+POLLING_USAGE = ("Usage: " + PROG + " polling          # show the current rate\n"
+                 "       " + PROG + " polling <hz>    # "
                  + " | ".join(str(hz) for hz in
                               sorted(protocol.POLLING_RATES, reverse=True)))
 
@@ -158,8 +178,8 @@ ACTION_NAMES = {
     (0x02, 0x03, 0x00): 'dpi-', (0x02, 0x01, 0x00): 'dpi-cycle',
     (0x08, 0x00, 0x00): 'rgb', (0x07, 0x00, 0x00): 'polling',
 }
-BUTTON_USAGE = ("Usage: main.py buttons               # list the 16 buttons\n"
-                "       main.py button <0-15> <action>\n"
+BUTTON_USAGE = ("Usage: " + PROG + " buttons               # list the 16 buttons\n"
+                "       " + PROG + " button <0-15> <action>\n"
                 f"actions: {' '.join(sorted(ACTIONS))}\n"
                 f"media:   {' '.join('media:' + m for m in sorted(MEDIA))}\n"
                 "keys:    key:<name>       a-z 0-9 f1-f12 enter esc "
@@ -240,7 +260,7 @@ COMMANDS = {
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if not argv:
-        raise SystemExit(__doc__)
+        raise SystemExit(USAGE)
     command = COMMANDS.get(argv[0].lower())
     if command:
         try:
