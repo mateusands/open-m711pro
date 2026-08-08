@@ -1,0 +1,71 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests (py${{ matrix.python-version }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        runner: [ubuntu-latest]
+        include:
+          # 3.8 is the floor declared in pyproject.toml, but it has no build
+          # for the current ubuntu-latest image.
+          - python-version: "3.8"
+            runner: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Nothing installed yet, on purpose: the core is pure stdlib and the
+      # fallback runner needs no pytest. If this step needs a dependency, the
+      # dependency-free promise is broken.
+      - name: Run the suite with zero dependencies installed
+        run: python tools/run_tests.py
+
+      - name: Install pytest
+        run: pip install -r requirements-dev.txt
+
+      - name: Run the suite under pytest
+        run: python -m pytest
+
+  packaging:
+    name: packaging
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the package
+        run: pip install .
+
+      # Run away from the checkout so the imports resolve against the INSTALLED
+      # package rather than the source tree next to us.
+      - name: Check the console entry points resolve
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -c "import m711pro; print(m711pro.__version__)"
+          python -c "
+          from importlib.metadata import distribution
+          eps = {ep.name: ep for ep in distribution('open-m711pro').entry_points}
+          for name in ('open-m711pro', 'open-m711pro-gui'):
+              assert callable(eps[name].load()), name
+              print(name, '->', eps[name].value)
+          "
+          test -x "$(command -v open-m711pro)"
