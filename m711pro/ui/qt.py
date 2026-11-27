@@ -1117,6 +1117,11 @@ class ButtonRow(QWidget):
     # -- state --------------------------------------------------------------
     def set_action(self, action):
         action = tuple(action)
+        if action == protocol.BTN_FACTORY_RESET:
+            # recognised, shown by name, and like any raw entry never sent back
+            _combo_pick_raw(self.action, len(BUTTON_ACTIONS),
+                            tr("Factory reset (not assignable here)"))
+            return
         for i, (_, known) in enumerate(BUTTON_ACTIONS):
             if known == action:
                 _combo_pick(self.action, len(BUTTON_ACTIONS), i)

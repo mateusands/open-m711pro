@@ -302,6 +302,13 @@ BUTTONS_PER_PACKET = 2
 
 BTN_NONE = (0x00, 0x00, 0x00)      # no action / disabled
 BTN_EXTENDED = (0x05, 0x00, 0x00)  # the action lives in the extended slot
+# Restore factory settings. The mouse ships it at table index 6, which no
+# physical button fires. Found 2026-11-27 by copying it to button 8 and
+# pressing once: DPI (-> 1000/2000/4000/8000/16000), LED (-> Streaming, red),
+# buttons and the DPI Effect group were rewritten to the factory defaults and
+# the extended slots erased. Named so it can be recognised when read back;
+# deliberately never offered as an action — one press wipes the configuration.
+BTN_FACTORY_RESET = (0x09, 0x00, 0x00)
 
 MOUSE_LEFT = 0x01
 MOUSE_RIGHT = 0x02

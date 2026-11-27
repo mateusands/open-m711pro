@@ -430,3 +430,12 @@ def test_measure_dpi_drains_motion_queued_between_runs():
         assert leftover == b""
     finally:
         os.close(r); os.close(w)
+
+
+# --- Type 0x09: restore factory settings --------------------------------------
+# Found 2026-11-27 by copying the 09 00 00 the mouse ships at table index 6 (no
+# physical button) to button 8 and pressing it once: DPI, LED, buttons and the
+# DPI Effect group were rewritten to the factory defaults and the extended
+# slots erased. Named so it is recognised; deliberately NOT offered as an action.
+def test_type_09_is_named_factory_reset():
+    assert p.BTN_FACTORY_RESET == (0x09, 0x00, 0x00)

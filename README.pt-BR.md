@@ -370,11 +370,12 @@ ação pelo app oficial e ler qual registro mudou:
 | 8 (atrás da roda, mais longe) | 9 |
 
 Os índices 5-8 e 12-15 não são acessíveis pela interface oficial. O índice 6
-vem de fábrica com `09 00 00` — um tipo de ação que não aparece em nenhuma
-tabela, nem na nossa nem na do m913-ctl. Como nenhum botão aponta para ele, o
-app oficial não serve para descobrir o que significa. `read_buttons` devolve os
-bytes crus e `send_button` preserva todo registro que não foi pedido para
-mudar, então ele sobrevive intacto.
+vem de fábrica com `09 00 00`, um tipo de ação que não aparece em nenhuma outra
+tabela. Copiado para o botão 8 e apertado uma vez, revelou-se **restaurar
+configurações de fábrica**: DPI, iluminação, botões e DPI Effect voltaram ao
+padrão e os slots estendidos foram apagados. Como nenhum botão físico aciona o
+índice 6, ele é inofensivo onde vem de fábrica; este projeto dá nome a ele, mas
+nunca o oferece como ação.
 
 ### O segundo bloco de LED (`0x0054`)
 
@@ -410,6 +411,7 @@ de códigos do m913-ctl. O teto do firmware é
 | `0x05` | a ação fica no slot estendido | — | — |
 | `0x07` | alternar taxa de polling: 125 → 250 → 500 → 1000 → 125 a cada clique | — | — |
 | `0x08` | liga/desliga RGB | — | — |
+| `0x09` | restaurar configurações de fábrica (não oferecido) | — | — |
 
 ### Slot estendido: uma lista de eventos
 

@@ -365,10 +365,12 @@ the official app and reading which record moved:
 | 8 (behind the wheel, furthest) | 9 |
 
 Indices 5-8 and 12-15 are not reachable from the official interface. Index 6
-holds `09 00 00` from the factory — an action type that appears in no table,
-ours or m913-ctl's. Since no button maps to it, the app can never be used to
-find out what it means. `read_buttons` returns raw bytes and `send_button`
-preserves every record it was not asked to change, so it survives untouched.
+holds `09 00 00` from the factory, an action type that appears in no other
+table. Copied to button 8 and pressed once, it turned out to be **restore
+factory settings**: DPI, lighting, buttons and the DPI Effect went back to the
+defaults and the extended slots were erased. Since no physical button fires
+index 6, it is harmless where it ships; this project names it but never offers
+it as an action.
 
 ### The second LED block (`0x0054`)
 
@@ -404,6 +406,7 @@ official app labels "16000".
 | `0x05` | action lives in the extended slot | — | — |
 | `0x07` | polling rate switch: 125 → 250 → 500 → 1000 → 125 per press | — | — |
 | `0x08` | RGB toggle | — | — |
+| `0x09` | restore factory settings (not offered) | — | — |
 
 ### Extended slot: an event list
 

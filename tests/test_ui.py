@@ -398,3 +398,15 @@ def test_qt_dialogs_follow_the_interface_language():
         i18n.set_language("en", persist=False)
         qt._install_qt_translator(app)
     assert qt._qt_translator is None
+
+
+def test_a_factory_reset_button_is_named_but_not_selectable():
+    if not HAVE_QT:
+        return
+    _qt()
+    from m711pro.ui.qt import ButtonRow, BUTTON_ACTIONS
+    row = ButtonRow(9)
+    row.set_action(protocol.BTN_FACTORY_RESET)
+    assert "Factory reset" in row.action.currentText()
+    assert row.current_action() is None                  # never sent back
+    assert protocol.BTN_FACTORY_RESET not in [a for _, a in BUTTON_ACTIONS]

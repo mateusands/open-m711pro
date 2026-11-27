@@ -195,6 +195,7 @@ ACTION_NAMES = {
     (0x01, 0x10, 0x00): 'forward', (0x02, 0x02, 0x00): 'dpi+',
     (0x02, 0x03, 0x00): 'dpi-', (0x02, 0x01, 0x00): 'dpi-cycle',
     (0x08, 0x00, 0x00): 'rgb', (0x07, 0x00, 0x00): 'polling',
+    protocol.BTN_FACTORY_RESET: 'factory reset (not assignable)',
 }
 BUTTON_USAGE = ("Usage: " + PROG + " buttons               # list the 16 buttons\n"
                 "       " + PROG + " button <0-15> <action>\n"

@@ -207,5 +207,7 @@ PT = {
     "Volume up": "Volume +",
     "Volume down": "Volume −",
     "unknown slot": "desconhecido",
+    "Factory reset (not assignable here)":
+        "Reset de fábrica (não atribuível aqui)",
     "unknown (usage {usage})": "desconhecido (código {usage})",
 }

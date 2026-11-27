@@ -424,3 +424,12 @@ def test_dpi_above_the_ceiling_is_not_relabelled_16000():
         out, _ = run(["dpi"])
     assert f"stage 1: {raw} DPI (outside the known range)" in out
     assert "stage 2: 1000 DPI" in out
+
+
+def test_buttons_names_the_factory_reset_and_does_not_offer_it():
+    table = [protocol.BTN_NONE] * 16
+    table[6] = protocol.BTN_FACTORY_RESET
+    with stubbed(read_buttons=Recorder(result=table)):
+        out, _ = run(["buttons"])
+    assert "factory reset" in out
+    assert "factory-reset" not in commands.ACTIONS and "reset" not in commands.ACTIONS
