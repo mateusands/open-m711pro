@@ -214,8 +214,18 @@ def test_dpi_with_one_value_unifies_every_stage():
 
     assert message is None
     assert send_dpi_all.calls == [(1600,)]
-    assert "1583" in out and "all five stages" in out
-    assert "you asked for 1600" in out          # the quantisation is disclosed
+    # shown as the official app shows it, with the real value still disclosed
+    assert "1600 DPI (≈1583 real)" in out and "all five stages" in out
+    assert "you asked for" not in out           # 1600 is what they get on screen
+
+
+def test_dpi_off_the_hundreds_says_what_it_became():
+    send_dpi_all = Recorder(result=(["cable"], 1667))
+    with stubbed(send_dpi_all=send_dpi_all, send_dpi=_tripwire,
+                 read_dpi_table=_tripwire):
+        out, _ = run(["dpi", "1650"])
+
+    assert "1700 DPI" in out and "you asked for 1650" in out
 
 
 def test_dpi_with_stage_and_value_changes_one_stage():

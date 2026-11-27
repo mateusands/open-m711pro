@@ -86,7 +86,9 @@ def _cmd_dpi(argv):
             raise SystemExit("Error: could not read the DPI from the mouse — "
                              "is the dongle plugged in and the device free?")
         for i, dpi in enumerate(table, 1):
-            print(f"  stage {i}: {dpi} DPI")
+            # read_dpi_table decodes the real value; byte -> DPI -> byte is the
+            # identity below the ceiling, so the app-style label is recoverable
+            print(f"  stage {i}: {protocol.dpi_text(protocol.dpi_to_byte(dpi))}")
         if len(set(table)) == 1:
             print("  (all five equal: the mouse's DPI button changes nothing)")
         return
@@ -100,18 +102,21 @@ def _cmd_dpi(argv):
     if len(numbers) == 1:                      # a single DPI across all stages
         requested = numbers[0]
         routes, actual = device.send_dpi_all(requested)
-        print(f"DPI = {actual} on all five stages (via {', '.join(routes)})")
-        if actual != requested:
+        byte = protocol.dpi_to_byte(actual)
+        print(f"DPI = {protocol.dpi_text(byte)} on all five stages "
+              f"(via {', '.join(routes)})")
+        if protocol.dpi_display(byte) != requested:
             print(f"  (you asked for {requested}; the hardware step is ~83 DPI)")
         return
 
     stage, requested = numbers
     routes, table = device.send_dpi(stage, requested)
-    actual = table[stage - 1]
-    print(f"Stage {stage} = {actual} DPI (via {', '.join(routes)})")
-    if actual != requested:
+    byte = protocol.dpi_to_byte(table[stage - 1])
+    print(f"Stage {stage} = {protocol.dpi_text(byte)} (via {', '.join(routes)})")
+    if protocol.dpi_display(byte) != requested:
         print(f"  (you asked for {requested}; the hardware step is ~83 DPI)")
-    print("  table: " + " . ".join(str(d) for d in table))
+    print("  table: " + " . ".join(
+        str(protocol.dpi_display(protocol.dpi_to_byte(d))) for d in table))
 
 
 def _cmd_dpi_effect(argv):

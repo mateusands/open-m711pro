@@ -173,3 +173,24 @@ def test_an_uninterpretable_action_is_shown_but_never_selectable():
         assert window.buttons._table[6] == (0x09, 0x00, 0x00)
     finally:
         stub.restore()
+
+
+def test_a_dpi_row_shows_the_app_label_and_the_real_value():
+    """Byte 0x07 is what the official app writes for "700": show 700, not 667.
+
+    An owner reported "I set 700 and it does not stay 700" — the byte was
+    right, only the number on screen differed from the official app's.
+    """
+    if not HAVE_QT:
+        return
+    _qt()
+    from m711pro.ui.qt import DpiRow
+    row = DpiRow("")
+    row.set_byte(0x07)
+    assert row.spin.value() == 700
+    assert row.real.text() == "≈667 real"
+    row.set_byte(0x0B)                         # 1000 is exact: no note
+    assert row.spin.value() == 1000 and row.real.text() == ""
+    # typing the shown value back must keep the same byte
+    row.spin.setValue(700); row._from_spin()
+    assert row.byte() == 0x07

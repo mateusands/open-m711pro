@@ -172,6 +172,47 @@ def byte_to_dpi(n):
     return round((n + 1) * 250 / 3)
 
 
+DPI_LABEL_STEP = 100      # the official app labels DPI in hundreds
+DPI_LABEL_MAX = 16000     # what the app calls the firmware ceiling (Cfg.ini)
+
+
+def dpi_label(n):
+    """The DPI the official app would show for register byte `n`, or None.
+
+    The register step (~83.33) is smaller than 100, so each multiple of 100
+    lands on its own byte and the app's label can be recovered from the byte
+    alone: it is the multiple of 100 that encodes to `n`. Reproduces all six
+    labels read off the app (700 for 0x07 although the step decodes to 667)
+    and the "16000" the app's Cfg.ini gives the ceiling byte 0xBD.
+
+    Display only — nothing here changes a byte on the wire.
+    """
+    if n == DPI_BYTE_MAX:
+        return DPI_LABEL_MAX
+    real = (n + 1) * 250 / 3
+    lower = int(real // DPI_LABEL_STEP) * DPI_LABEL_STEP
+    for candidate in (lower, lower + DPI_LABEL_STEP):
+        if DPI_MIN <= candidate <= DPI_MAX and dpi_to_byte(candidate) == n:
+            return candidate
+    return None
+
+
+def dpi_display(n):
+    """The number to show for byte `n`: the app's label, else the real value.
+
+    Either way dpi_to_byte(dpi_display(n)) == n, so a value typed back from the
+    screen writes the same byte.
+    """
+    label = dpi_label(n)
+    return byte_to_dpi(n) if label is None else label
+
+
+def dpi_text(n):
+    """"700 DPI (≈667 real)" — the label, plus the real value when it differs."""
+    shown, real = dpi_display(n), byte_to_dpi(n)
+    return f"{shown} DPI" if shown == real else f"{shown} DPI (≈{real} real)"
+
+
 def axis_pair(entry):
     """The two axis values of a table entry: a single value (X = Y) or (x, y).
 

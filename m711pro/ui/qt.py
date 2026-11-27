@@ -386,13 +386,14 @@ class LightingPage(QWidget):
 class DpiSpinBox(QSpinBox):
     """A DPI field whose arrows move ONE hardware step (~83 DPI).
 
-    With a fixed step of 100 the arrows land on values the mouse cannot hold
-    (700 becomes 667). Stepping byte by byte, every value shown really exists.
+    Stepping byte by byte, every value shown is one the mouse can hold. Values
+    are shown as the official app labels them (700, not the 667 the step
+    decodes to); the row's note carries the real value.
     """
     def stepBy(self, steps):
         b = protocol.dpi_to_byte(self.value()) + steps
         b = max(0, min(protocol.DPI_BYTE_MAX, b))
-        self.setValue(protocol.byte_to_dpi(b))
+        self.setValue(protocol.dpi_display(b))
 
 
 class DpiRow(QWidget):
@@ -434,10 +435,13 @@ class DpiRow(QWidget):
         self.spin_y.setPrefix("Y "); self.spin_y.setSuffix(" DPI")
         self.spin_y.setVisible(False)
         self.spin_y.editingFinished.connect(self.edited)
-        lay.addWidget(self.slider, 1); lay.addWidget(self.spin); lay.addWidget(self.spin_y)
+        # The real value, when the app-style label rounds it (700 -> ≈667).
+        self.real = QLabel(""); self.real.setObjectName("muted")
+        self.real.setMinimumWidth(78)
+        lay.addWidget(self.slider, 1); lay.addWidget(self.spin)
+        lay.addWidget(self.real); lay.addWidget(self.spin_y)
 
-        self.slider.valueChanged.connect(
-            lambda v: self._set_spin(protocol.byte_to_dpi(v)))
+        self.slider.valueChanged.connect(self._show_byte)
         self.slider.sliderReleased.connect(self.edited)
         self.spin.editingFinished.connect(self._from_spin)
         self.setEnabled(False)
@@ -445,10 +449,15 @@ class DpiRow(QWidget):
     def _from_spin(self):
         b = protocol.dpi_to_byte(self.spin.value())
         self._set_slider(b)
-        self._set_spin(protocol.byte_to_dpi(b))    # echo the quantised value
+        self._show_byte(b)                          # echo the quantised value
         if not self.spin_y.isVisible():
-            self._set_spin_y(protocol.byte_to_dpi(b))
+            self._set_spin_y(protocol.dpi_display(b))
         self.edited.emit()
+
+    def _show_byte(self, b):
+        self._set_spin(protocol.dpi_display(b))
+        real = protocol.byte_to_dpi(b)
+        self.real.setText("" if real == protocol.dpi_display(b) else f"≈{real} real")
 
     def _set_spin(self, dpi):
         self.spin.blockSignals(True)
@@ -468,8 +477,8 @@ class DpiRow(QWidget):
     def set_byte(self, b, y=None):
         """Show a stage. `y` is the Y-axis byte when it differs from X."""
         self._set_slider(b)
-        self._set_spin(protocol.byte_to_dpi(b))
-        self._set_spin_y(protocol.byte_to_dpi(b if y is None else y))
+        self._show_byte(b)
+        self._set_spin_y(protocol.dpi_display(b if y is None else y))
 
     def byte(self):
         return self.slider.value()
@@ -567,10 +576,10 @@ class DpiPage(QWidget):
         root.addWidget(self.stages_box)
 
         hint = QLabel(
-            f"DPI is a single byte with a step of ~{protocol.DPI_STEP:.0f}, so 700 does "
-            "not exist (its neighbour is 667). Type any value: it snaps to the "
-            "nearest step, and the number shown is what the mouse actually holds. "
-            "Exact with no rounding: 1000, 2000, 4000, 8000.")
+            f"DPI is a single byte with a step of ~{protocol.DPI_STEP:.0f}. Values are "
+            "shown as the official app labels them; when the mouse really holds "
+            "something slightly different (700 is stored as ≈667), the real value "
+            "appears next to the field. Exact: 1000, 2000, 4000, 8000.")
         hint.setObjectName("muted"); hint.setWordWrap(True); root.addWidget(hint)
 
         root.addWidget(self._muted("DPI STAGE INDICATOR (DPI EFFECT)"))
@@ -613,7 +622,7 @@ class DpiPage(QWidget):
         if self._mode_key() != "single" or not self._loaded:
             return
         if len(set(self._raw)) > 1:
-            current = " · ".join(str(protocol.byte_to_dpi(b)) for b in self._raw)
+            current = " · ".join(str(protocol.dpi_display(b)) for b in self._raw)
             self.single_note.setText(
                 f"The five stages still differ ({current}). Confirm a value above to "
                 "make them all equal.")
@@ -741,7 +750,7 @@ class DpiPage(QWidget):
     def _commit_single(self):
         b = self.single.byte()
         self._send([b] * protocol.DPI_STAGES,
-                   f"DPI = {protocol.byte_to_dpi(b)} on all five stages")
+                   f"DPI = {protocol.dpi_text(b)} on all five stages")
 
     def _commit_stage(self, k):
         # start from the bytes we READ, not from the sliders: a stage the slider
@@ -749,10 +758,10 @@ class DpiPage(QWidget):
         entries = list(self._axes)
         entries[k] = self.rows[k].axes()
         x, y = entries[k]
-        label = (f"Stage {k + 1} = {protocol.byte_to_dpi(x)} DPI"
+        label = (f"Stage {k + 1} = {protocol.dpi_text(x)}"
                  if x == y else
-                 f"Stage {k + 1} = X {protocol.byte_to_dpi(x)} / "
-                 f"Y {protocol.byte_to_dpi(y)} DPI")
+                 f"Stage {k + 1} = X {protocol.dpi_text(x)} / "
+                 f"Y {protocol.dpi_text(y)}")
         self._send(entries, label)
 
     def _toggle_effect(self):
@@ -760,7 +769,7 @@ class DpiPage(QWidget):
         try:
             vias = device.send_dpi_effect(on)
             self._show_effect(on)
-            self.status.emit(f"DPI Effect {'ligado' if on else 'desligado'}"
+            self.status.emit(f"DPI Effect {'on' if on else 'off'}"
                              f" — via {', '.join(vias)}", False)
         except device.DeviceNotFound as exc:
             self.effect_btn.setChecked(not on)      # desfaz o toggle visual

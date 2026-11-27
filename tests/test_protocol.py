@@ -349,3 +349,51 @@ def test_build_write_rejects_data_that_cannot_fit():
     except ValueError:
         return
     raise AssertionError("build_write should refuse more data than a packet holds")
+
+
+# --- DPI labels: show what the official app shows ---------------------------
+# The register holds ~83.33 DPI steps, so the byte the app writes for "700"
+# decodes to 667. Showing 667 is honest but reads as a bug to everyone who
+# typed 700 (an owner reported exactly that). Because the step is smaller than
+# 100, every multiple of 100 lands on its own byte, so the app's label can be
+# recovered from the byte alone — WITHOUT changing a single byte on the wire.
+#
+# Origin: the six (label, byte) pairs read off the official app during the
+# DPI captures, plus 0xBD = "16000" from the app's own Cfg.ini.
+APP_LABELS = {0x07: 700, 0x0B: 1000, 0x17: 2000, 0x2F: 4000, 0x5F: 8000,
+              0x77: 10000, 0xBD: 16000}
+
+
+def test_dpi_label_reproduces_every_label_the_official_app_showed():
+    for byte, label in APP_LABELS.items():
+        assert p.dpi_label(byte) == label, hex(byte)
+
+
+def test_dpi_display_round_trips_to_the_same_byte_for_every_byte():
+    # the safety property: typing back what is shown must write the same byte
+    for byte in range(p.DPI_BYTE_MAX + 1):
+        assert p.dpi_to_byte(p.dpi_display(byte)) == byte, hex(byte)
+
+
+def test_every_multiple_of_100_comes_back_as_typed():
+    # up to 15700: 15800 and 16000 both saturate at the ceiling byte 0xBD,
+    # which the app calls 16000 (next test)
+    for dpi in range(p.DPI_MIN, 15800, 100):
+        assert p.dpi_display(p.dpi_to_byte(dpi)) == dpi, dpi
+
+
+def test_the_ceiling_shows_as_16000_whichever_value_reached_it():
+    assert p.dpi_display(p.dpi_to_byte(15800)) == 16000
+    assert p.dpi_display(p.dpi_to_byte(16000)) == 16000
+
+
+def test_a_byte_with_no_round_label_shows_the_real_value():
+    # 0x08 sits between 700 (0x07) and 800 (0x09): no app label lands on it
+    assert p.dpi_label(0x08) is None
+    assert p.dpi_display(0x08) == p.byte_to_dpi(0x08) == 750
+
+
+def test_dpi_text_mentions_the_real_value_only_when_it_differs():
+    assert p.dpi_text(0x07) == "700 DPI (≈667 real)"
+    assert p.dpi_text(0x0B) == "1000 DPI"
+    assert p.dpi_text(0x08) == "750 DPI"

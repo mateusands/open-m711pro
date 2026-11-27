@@ -206,9 +206,11 @@ open-m711pro button 1 middle
 open-m711pro button 9 media:mute
 ```
 
-> DPI is stored as a single byte with a step of ~83, so the value shown is what
-> the mouse actually holds: asking for 1600 gives 1583. The official app hides
-> this by displaying the number you typed. 1000, 2000, 4000 and 8000 are exact.
+> DPI is stored as a single byte with a step of ~83, so 700 is really stored as
+> ≈667 and 1600 as ≈1583. The bytes are exactly the ones the official app
+> writes, and values are shown the way the app shows them — `700 DPI (≈667 real)`
+> — so the number you typed stays on screen and the real one is still visible.
+> 1000, 2000, 4000 and 8000 are exact.
 
 ## The interface
 
