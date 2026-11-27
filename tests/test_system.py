@@ -125,3 +125,12 @@ def test_setup_refuses_to_run_under_sudo():
             raise AssertionError("setup under sudo must refuse")
     finally:
         del os.environ["SUDO_USER"]
+
+
+def test_the_launcher_finds_the_gui_command_next_to_the_interpreter():
+    # pipx/venv installs put it beside sys.executable, often off the PATH
+    import sys
+    beside = os.path.join(os.path.dirname(sys.executable), "open-m711pro-gui")
+    found = system.launcher(which=lambda name: None,
+                            exists=lambda path: path == beside)
+    assert found == [beside]

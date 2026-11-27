@@ -35,7 +35,7 @@ def udev_rule():
     return _read(RULE_NAME)
 
 
-def launcher(which=shutil.which):
+def launcher(which=shutil.which, exists=os.path.exists):
     """The argv the menu entry should run, as a list.
 
     The installed GUI command when it exists; otherwise main.py of the checkout
@@ -47,9 +47,13 @@ def launcher(which=shutil.which):
     installed = which(GUI_COMMAND)
     if installed:
         return [installed]
+    # pipx and venv installs put it beside the interpreter, often off the PATH
+    beside = os.path.join(os.path.dirname(sys.executable), GUI_COMMAND)
+    if exists(beside):
+        return [beside]
     checkout_main = os.path.join(os.path.dirname(os.path.dirname(DATA_DIR)),
                                  "main.py")
-    if os.path.exists(checkout_main):
+    if exists(checkout_main):
         return [sys.executable, checkout_main]
     return [sys.executable, "-m", "m711pro"]
 
