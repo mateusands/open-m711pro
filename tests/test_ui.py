@@ -33,6 +33,8 @@ def _qt():
     global _app
     if _app is None:
         _app = QApplication.instance() or QApplication([])
+    from m711pro.ui import i18n
+    i18n.set_language("en", persist=False)     # assertions are in English
     return _app
 
 
@@ -316,4 +318,43 @@ def test_opening_the_app_sends_nothing():
         QTest.qWait(700)                        # past any debounce
         assert stub.sent == []
     finally:
+        stub.restore()
+
+
+# --- Language ----------------------------------------------------------------
+def test_switching_to_portuguese_relabels_and_sends_nothing():
+    if not HAVE_QT:
+        return
+    from PySide6.QtTest import QTest
+    from m711pro.ui import i18n
+    stub = _Stub(); stub.install()
+    try:
+        _, window = _window()
+        window._set_language("pt", persist=False)
+        _qt().processEvents(); QTest.qWait(500)
+        assert [b.text() for b in window.nav_btns] == \
+            ["Iluminação", "Sensibilidade (DPI)", "Botões"]
+        assert stub.sent == []                     # a relabel is not a write
+    finally:
+        i18n.set_language("en", persist=False)
+        stub.restore()
+
+
+def test_a_translated_effect_still_sends_the_right_command():
+    """The combo paints "Respiração" but must still dispatch "Breathing"."""
+    if not HAVE_QT:
+        return
+    from m711pro.ui import i18n
+    stub = _Stub(); stub.install()
+    try:
+        _, window = _window()
+        window._set_language("pt", persist=False)
+        combo = window.lighting.effect
+        combo.setCurrentIndex(combo.findData("Off")); _qt().processEvents()
+        stub.sent.clear()
+        combo.setCurrentIndex(combo.findData("Breathing")); _qt().processEvents()
+        assert combo.currentText() == "Respiração"
+        assert stub.sent and stub.sent[-1][0] == "send_breathing"
+    finally:
+        i18n.set_language("en", persist=False)
         stub.restore()
