@@ -238,10 +238,14 @@ open-m711pro dpi 1600       # DPI único: aplica nos cinco estágios
 open-m711pro dpi 3 4000     # estágio 3 = 4000 DPI
 open-m711pro dpi-effect on  # LED indicador de estágio de DPI
 
-open-m711pro buttons        # lista os 16 slots de botão
-open-m711pro button 1 middle
-open-m711pro button 9 media:mute
+open-m711pro buttons        # os 16 slots da tabela e qual botão do mouse é cada um
+open-m711pro button 2 middle        # índice 2 = botão 3 do mouse (a roda)
+open-m711pro button 9 media:mute    # índice 9 = botão 8 do mouse
+open-m711pro button 10 combo:ctrl+c # índice 10 = botão 6 do mouse
 ```
+
+> O `button` recebe o **índice da tabela**, não o número impresso no mouse — o
+> `buttons` mostra os dois. A interface gráfica usa os números do mouse.
 
 > O DPI é guardado num único byte com passo de ~83, então 700 fica guardado
 > como ≈667 e 1600 como ≈1583. Os bytes são exatamente os que o app oficial

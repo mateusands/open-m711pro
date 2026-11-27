@@ -433,3 +433,16 @@ def test_buttons_names_the_factory_reset_and_does_not_offer_it():
         out, _ = run(["buttons"])
     assert "factory reset" in out
     assert "factory-reset" not in commands.ACTIONS and "reset" not in commands.ACTIONS
+
+
+def test_buttons_shows_the_number_printed_on_the_mouse():
+    """`button <n>` takes the TABLE index; the listing must say which physical
+    button each index is, or `button 1 middle` silently remaps the RIGHT
+    button (index 1 is button 2 on the mouse)."""
+    table = [protocol.BTN_NONE] * 16
+    with stubbed(read_buttons=Recorder(result=table)):
+        out, _ = run(["buttons"])
+    lines = {int(l.split(":")[0]): l for l in out.splitlines() if ":" in l}
+    assert "mouse button 2" in lines[1]
+    assert "mouse button 8" in lines[9] and "mouse button 6" in lines[10]
+    assert "mouse button" not in lines[5]                 # no physical button

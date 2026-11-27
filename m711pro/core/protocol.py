@@ -298,6 +298,10 @@ def build_dpi_colors(colors):
 # Redragon M913 — both were verified against this mouse before being used.
 BUTTON_ADDR = 0x0060
 BUTTON_COUNT = 16
+# Table index -> the number printed on the mouse (and used by the official app).
+# Each pair was proven by a single-variable experiment; the other eight indices
+# fire nothing on this model. The order is NOT the index order.
+BUTTON_NUMBERS = {0: 1, 1: 2, 2: 3, 3: 4, 4: 5, 10: 6, 11: 7, 9: 8}
 BUTTONS_PER_PACKET = 2
 
 BTN_NONE = (0x00, 0x00, 0x00)      # no action / disabled

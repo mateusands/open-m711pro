@@ -234,10 +234,14 @@ open-m711pro dpi 1600       # single DPI: apply it to all five stages
 open-m711pro dpi 3 4000     # stage 3 = 4000 DPI
 open-m711pro dpi-effect on  # DPI stage indicator LED
 
-open-m711pro buttons        # list the 16 button slots
-open-m711pro button 1 middle
-open-m711pro button 9 media:mute
+open-m711pro buttons        # the 16 table slots, and which mouse button each is
+open-m711pro button 2 middle        # index 2 = mouse button 3 (the wheel)
+open-m711pro button 9 media:mute    # index 9 = mouse button 8
+open-m711pro button 10 combo:ctrl+c # index 10 = mouse button 6
 ```
+
+> `button` takes the **table index**, not the number printed on the mouse —
+> `buttons` lists both. The graphical interface uses the mouse's numbers.
 
 > DPI is stored as a single byte with a step of ~83, so 700 is really stored as
 > ≈667 and 1600 as ≈1583. The bytes are exactly the ones the official app

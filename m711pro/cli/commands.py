@@ -14,9 +14,9 @@ Usage:
     python3 main.py polling        # show the USB polling rate
     python3 main.py polling 500    # set it to 500 Hz
 
-    python3 main.py buttons        # list the 16 buttons
-    python3 main.py button 1 middle
-    python3 main.py button 9 media:mute
+    python3 main.py buttons        # list the 16 slots and their mouse buttons
+    python3 main.py button 2 middle      # TABLE index 2 = mouse button 3
+    python3 main.py button 9 media:mute  # index 9 = mouse button 8
     python3 main.py button 9 key:a
 
     python3 main.py setup          # install the udev rule and the menu entry
@@ -198,7 +198,8 @@ ACTION_NAMES = {
     protocol.BTN_FACTORY_RESET: 'factory reset (not assignable)',
 }
 BUTTON_USAGE = ("Usage: " + PROG + " buttons               # list the 16 buttons\n"
-                "       " + PROG + " button <0-15> <action>\n"
+                "       " + PROG + " button <0-15> <action>  # TABLE index, "
+                "see `buttons`\n"
                 f"actions: {' '.join(sorted(ACTIONS))}\n"
                 f"media:   {' '.join('media:' + m for m in sorted(MEDIA))}\n"
                 "keys:    key:<name>       a-z 0-9 f1-f12 enter esc "
@@ -218,8 +219,10 @@ def _cmd_buttons(argv):
             name = f"fire (speed {action[1]}, {action[2]} clicks)"
         extra = (f"  slot 0x{protocol.ext_slot_addr(i):04X}"
                  if action == protocol.BTN_EXTENDED else "")
+        number = protocol.BUTTON_NUMBERS.get(i)
+        where = f"  (mouse button {number})" if number else ""
         print(f"  {i:2d}: {action[0]:02x} {action[1]:02x} {action[2]:02x}  "
-              f"{name or '?'}{extra}")
+              f"{name or '?'}{extra}{where}")
 
 
 def _cmd_button(argv):

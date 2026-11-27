@@ -474,3 +474,11 @@ def test_changing_the_modifier_rewrites_the_combo():
         assert sent[:len(expected)] == expected
     finally:
         stub.restore()
+
+
+def test_the_diagram_and_the_protocol_agree_on_button_numbers():
+    if not HAVE_QT:
+        return
+    from m711pro.ui.qt import MouseDiagram
+    diagram = {index: n for n, (_, index, _r) in MouseDiagram.BUTTONS.items()}
+    assert diagram == protocol.BUTTON_NUMBERS
