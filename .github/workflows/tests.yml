@@ -69,3 +69,15 @@ jobs:
               print(name, '->', eps[name].value)
           "
           test -x "$(command -v open-m711pro)"
+
+      # v0.1.0-v0.1.2 shipped without the udev rule, so release users were told
+      # to run a script they did not have. Prove the installed package has it.
+      - name: Check the udev rule and menu entry ship inside the package
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -c "
+          from m711pro import system
+          assert 'uaccess' in system.udev_rule()
+          assert 'Exec=' in system.desktop_entry(['open-m711pro-gui'])
+          print('package data OK')
+          "

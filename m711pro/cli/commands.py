@@ -18,6 +18,9 @@ Usage:
     python3 main.py button 1 middle
     python3 main.py button 9 media:mute
     python3 main.py button 9 key:a
+
+    python3 main.py setup          # install the udev rule and the menu entry
+    python3 main.py setup --uninstall
 """
 import os
 import sys
@@ -248,7 +251,30 @@ def _cmd_button(argv):
     print(f"Button {index} = {name} (via {', '.join(routes)})")
 
 
+def _cmd_setup(args):
+    """Install (or remove) the udev rule and the menu entry.
+
+    Lives in the CLI so pip and release installs, which do not carry
+    packaging/install.sh, can still grant themselves access to the mouse.
+    """
+    import subprocess
+    from .. import system
+    try:
+        if not args:
+            return system.setup()
+        if args == ['--uninstall']:
+            return system.uninstall()
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(f"Error: '{' '.join(exc.cmd)}' failed "
+                         f"(exit {exc.returncode})")
+    except FileNotFoundError as exc:
+        raise SystemExit(f"Error: {exc.filename} not found — install the "
+                         "udev rule by hand, see the README")
+    raise SystemExit(f"Usage: {PROG} setup [--uninstall]")
+
+
 COMMANDS = {
+    'setup': _cmd_setup,
     'dpi': _cmd_dpi,
     'dpi-effect': _cmd_dpi_effect, 'dpieffect': _cmd_dpi_effect,
     'buttons': _cmd_buttons,

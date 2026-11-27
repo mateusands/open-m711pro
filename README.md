@@ -102,12 +102,15 @@ with `python3 main.py` keeps working and needs no install at all.
 Then grant access to the device and add the menu entry:
 
 ```bash
-sudo sh packaging/install.sh
+open-m711pro setup             # pip install or release download
+sudo sh packaging/install.sh   # or, from a checkout
 ```
 
-That installs a udev rule for both product IDs (`25a7:fa07` and `25a7:fa08`),
-reloads udev, and drops a `.desktop` file in the application menu. Replug the
-mouse afterwards. It is idempotent, and `--uninstall` reverses it.
+Either installs a udev rule for both product IDs (`25a7:fa07` and `25a7:fa08`),
+reloads udev, and adds the app to the application menu. `setup` asks for `sudo`
+only to copy the rule into `/etc`. Replug the mouse afterwards. Both are
+idempotent, and `--uninstall` reverses them. Without the rule the app tells you
+so: "this user cannot open it — the udev rule is not installed".
 
 The rule uses `TAG+="uaccess"`, which hands the `hidraw` node to the user of the
 active local session, rather than the `MODE="0666"` one-liner that would leave

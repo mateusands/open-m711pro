@@ -62,8 +62,9 @@ def _no_permission(paths):
     nodes = ", ".join(paths)
     return NoPermission(
         f"the mouse was found ({nodes}) but this user cannot open it — the udev "
-        "rule is not installed. From a checkout of the repository run "
-        "'sudo sh packaging/install.sh', then replug the dongle.")
+        "rule is not installed. Run 'open-m711pro setup' (from a checkout: "
+        "'python3 main.py setup' or 'sudo sh packaging/install.sh'), then "
+        "replug the dongle.")
 
 
 def _IOC(direction, typ, nr, size):

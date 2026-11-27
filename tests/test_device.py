@@ -524,7 +524,8 @@ def test_send_packets_reports_a_permission_problem_as_such():
         else:
             raise AssertionError("a denied node must raise NoPermission")
     assert "/dev/hidraw9" in message
-    assert "install.sh" in message
+    assert "open-m711pro setup" in message    # works from pip and releases
+    assert "install.sh" in message            # and the checkout path
 
 
 def test_read_register_reports_a_permission_problem_as_such():

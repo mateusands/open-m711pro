@@ -6,9 +6,14 @@ menu integration.
 
 | File | Purpose |
 |------|---------|
-| `99-m711pro.rules` | udev rule granting the logged-in user access to the mouse's `/dev/hidraw*` node (both PIDs, `25a7:fa07` and `25a7:fa08`). |
-| `open-m711pro.desktop` | freedesktop entry so the GUI shows up in the application menu. Runs `open-m711pro-gui`. |
+| `../m711pro/data/99-m711pro.rules` | udev rule granting the logged-in user access to the mouse's `/dev/hidraw*` node (both PIDs, `25a7:fa07` and `25a7:fa08`). |
+| `../m711pro/data/open-m711pro.desktop` | freedesktop entry template so the GUI shows up in the application menu. |
 | `install.sh` | installs/removes the two files above, reloads udev, refreshes the desktop database. Idempotent, root-checked. |
+
+The two data files live **inside the Python package** so that a pip or release
+install carries them too: `open-m711pro setup` installs the same rule without a
+checkout (asking for `sudo` only for that step) and writes a per-user menu
+entry pointing at whichever launcher actually exists.
 
 The Python package itself is installed with `pip`; `install.sh` deliberately
 does not touch it.
@@ -47,8 +52,13 @@ pip install --user -e '.[gui]'
 ### 2. Device access and the menu entry
 
 ```bash
-sudo sh packaging/install.sh
+open-m711pro setup             # any install: pip, release download or checkout
+sudo sh packaging/install.sh   # from a checkout, system-wide menu entry
 ```
+
+Either one is enough. `install.sh` points the menu entry at this checkout's
+`main.py`, so it works even if you never ran pip — keep the checkout where it
+is.
 
 Then replug the mouse (or the 2.4G dongle) so udev applies the new rule.
 
@@ -57,7 +67,7 @@ Running it again is safe: files that already match are left alone.
 ## Uninstall
 
 ```bash
-sudo sh packaging/install.sh --uninstall
+open-m711pro setup --uninstall     # or: sudo sh packaging/install.sh --uninstall
 pip uninstall open-m711pro
 ```
 
@@ -81,11 +91,11 @@ systems without it — still narrower than `0666`.
 ## Manual install, without the script
 
 ```bash
-sudo install -m 0644 packaging/99-m711pro.rules /etc/udev/rules.d/99-m711pro.rules
+sudo install -m 0644 m711pro/data/99-m711pro.rules /etc/udev/rules.d/99-m711pro.rules
 sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=hidraw
 
-sudo install -m 0644 packaging/open-m711pro.desktop /usr/share/applications/open-m711pro.desktop
+sudo install -m 0644 m711pro/data/open-m711pro.desktop /usr/share/applications/open-m711pro.desktop
 ```
 
 For a per-user menu entry instead, drop the `.desktop` file into

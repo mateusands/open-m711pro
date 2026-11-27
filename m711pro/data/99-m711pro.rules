@@ -1,8 +1,9 @@
 # udev rules for the Redragon M711 Pro (Compx 25a7) — open-m711pro
 #
-# Install to /etc/udev/rules.d/99-m711pro.rules, then:
+# Installed by `open-m711pro setup` (or packaging/install.sh from a checkout).
+# By hand: copy to /etc/udev/rules.d/99-m711pro.rules, then:
 #   sudo udevadm control --reload-rules && sudo udevadm trigger
-# (packaging/install.sh does both for you)
+# (both installers do this for you)
 #
 # The mouse is configured through HID Feature Reports on its /dev/hidraw* node,
 # which is root-only by default. These rules hand access to the logged-in user.

@@ -23,8 +23,11 @@ DESKTOP_DIR="/usr/share/applications"
 UDEV_RULE_DEST="$UDEV_RULE_DIR/$UDEV_RULE_NAME"
 DESKTOP_DEST="$DESKTOP_DIR/$DESKTOP_NAME"
 
-# Directory holding this script, so it works from anywhere.
+# Directory holding this script, so it works from anywhere. The two files live
+# inside the Python package (m711pro/data/) so pip installs carry them too.
 SRC_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_DIR=$(dirname -- "$SRC_DIR")
+DATA_DIR="$REPO_DIR/m711pro/data"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -103,22 +106,28 @@ do_install() {
     say "open-m711pro: installing system integration"
 
     say "udev rule:"
-    install_file "$SRC_DIR/$UDEV_RULE_NAME" "$UDEV_RULE_DEST"
+    install_file "$DATA_DIR/$UDEV_RULE_NAME" "$UDEV_RULE_DEST"
     reload_udev
 
     say "desktop entry:"
+    # The entry runs main.py from this checkout, which works whether or not the
+    # package was pip-installed: the README's per-distribution steps never run
+    # pip, and an entry pointing at 'open-m711pro-gui' did nothing for them.
+    entry=$(mktemp)
+    trap 'rm -f "$entry"' EXIT
+    sed "s|^Exec=.*|Exec=python3 \"$REPO_DIR/main.py\"|" \
+        "$DATA_DIR/$DESKTOP_NAME" > "$entry"
     if command -v desktop-file-validate >/dev/null 2>&1; then
-        if ! desktop-file-validate "$SRC_DIR/$DESKTOP_NAME"; then
+        if ! desktop-file-validate "$entry"; then
             die "the .desktop file failed validation; nothing was installed"
         fi
     fi
-    install_file "$SRC_DIR/$DESKTOP_NAME" "$DESKTOP_DEST"
+    install_file "$entry" "$DESKTOP_DEST"
     refresh_desktop_db
 
     say ""
     say "Done. Replug the mouse (or the 2.4G dongle) so the new rule applies."
-    say "The menu entry runs 'open-m711pro-gui', which comes from the Python"
-    say "package — install it with:  pip install '.[gui]'"
+    say "The menu entry runs $REPO_DIR/main.py — keep this checkout where it is."
 }
 
 do_uninstall() {

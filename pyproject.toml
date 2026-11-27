@@ -53,3 +53,8 @@ version = { attr = "m711pro.__version__" }
 [tool.setuptools.packages.find]
 include = ["m711pro*"]
 namespaces = false
+
+# The udev rule and the menu entry travel inside the package, so a wheel or a
+# release download can run `open-m711pro setup` without a checkout.
+[tool.setuptools.package-data]
+"m711pro.data" = ["*.rules", "*.desktop"]

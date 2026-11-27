@@ -374,3 +374,34 @@ def test_stubbing_restores_the_originals():
         assert device.send_color is not originals[2]
     assert (device.send_packets, device.find_devices, device.send_color,
             state.save) == originals
+
+
+# --- setup: the udev rule and menu entry, for pip and release installs ------
+def test_setup_dispatches_to_the_system_module():
+    from m711pro import system
+    calls = []
+    original = system.setup
+    system.setup = lambda **kw: calls.append("setup")
+    try:
+        with stubbed():                      # setup must not touch the mouse
+            commands.main(["setup"])
+    finally:
+        system.setup = original
+    assert calls == ["setup"]
+
+
+def test_setup_uninstall_dispatches_to_uninstall():
+    from m711pro import system
+    calls = []
+    original = system.uninstall
+    system.uninstall = lambda **kw: calls.append("uninstall")
+    try:
+        with stubbed():
+            commands.main(["setup", "--uninstall"])
+    finally:
+        system.uninstall = original
+    assert calls == ["uninstall"]
+
+
+def test_setup_is_in_the_usage_text():
+    assert " setup" in commands.USAGE
