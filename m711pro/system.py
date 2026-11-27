@@ -20,6 +20,25 @@ DESKTOP_NAME = "open-m711pro.desktop"
 RULE_DEST = "/etc/udev/rules.d/" + RULE_NAME
 GUI_COMMAND = "open-m711pro-gui"
 
+# The first README (v0, in Portuguese) told people to create this file with
+# this single line. It makes every Compx hidraw node world-writable, and its
+# name differs from ours, so installing the uaccess rule alone left it active.
+LEGACY_RULE = "/etc/udev/rules.d/99-redragon-m711.rules"
+LEGACY_LINE = 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="25a7", MODE="0666"'
+
+
+def legacy_rule(path=LEGACY_RULE):
+    """None when absent; "ours" when it is exactly the line we told people to
+    write (safe to remove); "modified" when someone edited it (left alone)."""
+    try:
+        with open(path) as handle:
+            lines = [l.strip() for l in handle.read().splitlines() if l.strip()]
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return "modified"                      # unreadable: never touch it
+    return "ours" if lines == [LEGACY_LINE] else "modified"
+
 
 class RunAsUser(Exception):
     """setup was started through sudo; it must run as the desktop user."""
@@ -106,7 +125,8 @@ def _run(cmd):
     subprocess.run(cmd, check=True)
 
 
-def setup(run=_run, data_home=None, is_root=None, which=shutil.which, say=print):
+def setup(run=_run, data_home=None, is_root=None, which=shutil.which, say=print,
+          legacy_path=LEGACY_RULE):
     """Install the udev rule (via sudo) and this user's menu entry."""
     if is_root is None:
         is_root = os.geteuid() == 0
@@ -117,8 +137,18 @@ def setup(run=_run, data_home=None, is_root=None, which=shutil.which, say=print)
     say("udev rule (grants the logged-in user access to the mouse):")
     with tempfile.NamedTemporaryFile("w", suffix=".rules", delete=False) as tmp:
         tmp.write(udev_rule())
+    commands = udev_install_commands(tmp.name, is_root)
+    legacy = legacy_rule(legacy_path)
+    if legacy == "ours":
+        say(f"removing the old world-writable rule {legacy_path} (MODE 0666, "
+            "from an early version of the README):")
+        commands.insert(1, _as_root(["rm", "-f", legacy_path], is_root))
+    elif legacy == "modified":
+        say(f"warning: {legacy_path} exists and was edited, so it is left alone. "
+            "If it still sets MODE=\"0666\", remove it yourself — it keeps the "
+            "mouse writable by every account.")
     try:
-        for cmd in udev_install_commands(tmp.name, is_root):
+        for cmd in commands:
             say("  $ " + " ".join(cmd))
             run(cmd)
     finally:

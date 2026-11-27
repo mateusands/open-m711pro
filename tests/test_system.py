@@ -95,7 +95,8 @@ def test_setup_runs_the_udev_steps_and_writes_the_entry():
     ran = []
     with tempfile.TemporaryDirectory() as tmp:
         system.setup(run=ran.append, data_home=tmp, is_root=False,
-                     which=lambda name: "/bin/" + name, say=lambda *_: None)
+                     which=lambda name: "/bin/" + name, say=lambda *_: None,
+                     legacy_path=os.path.join(tmp, "none.rules"))
         assert os.path.exists(os.path.join(tmp, "applications",
                                            "open-m711pro.desktop"))
     assert len(ran) == 3 and ran[0][0] == "sudo"
@@ -134,3 +135,53 @@ def test_the_launcher_finds_the_gui_command_next_to_the_interpreter():
     found = system.launcher(which=lambda name: None,
                             exists=lambda path: path == beside)
     assert found == [beside]
+
+
+# --- The legacy rule from the first README -----------------------------------
+# v0 of the README told people to create 99-redragon-m711.rules with MODE 0666.
+# Its file name differs from ours, so installing the new uaccess rule alone
+# leaves the world-writable one active. Setup removes it — but only when it is
+# byte-for-byte the line we told people to write.
+def _legacy(tmp, content):
+    path = os.path.join(tmp, "99-redragon-m711.rules")
+    with open(path, "w") as handle:
+        handle.write(content)
+    return path
+
+
+def test_the_legacy_rule_we_wrote_is_recognised():
+    with tempfile.TemporaryDirectory() as tmp:
+        assert system.legacy_rule(_legacy(tmp, system.LEGACY_LINE + "\n")) == "ours"
+        assert system.legacy_rule(_legacy(tmp, "# edited\n" + system.LEGACY_LINE)) \
+            == "modified"
+        assert system.legacy_rule(os.path.join(tmp, "absent.rules")) is None
+
+
+def test_setup_removes_our_legacy_rule_before_reloading():
+    ran = []
+    with tempfile.TemporaryDirectory() as tmp:
+        legacy = _legacy(tmp, system.LEGACY_LINE + "\n")
+        system.setup(run=ran.append, data_home=tmp, is_root=False,
+                     which=lambda name: "/bin/" + name, say=lambda *_: None,
+                     legacy_path=legacy)
+    assert ["sudo", "rm", "-f", legacy] in ran
+    assert ran.index(["sudo", "rm", "-f", legacy]) < \
+        ran.index(["sudo", "udevadm", "control", "--reload-rules"])
+
+
+def test_setup_leaves_an_edited_legacy_rule_alone_and_says_so():
+    ran, said = [], []
+    with tempfile.TemporaryDirectory() as tmp:
+        legacy = _legacy(tmp, "# my own tweaks\n" + system.LEGACY_LINE + "\n")
+        system.setup(run=ran.append, data_home=tmp, is_root=False,
+                     which=lambda name: "/bin/" + name, say=said.append,
+                     legacy_path=legacy)
+    assert not any(cmd[-1] == legacy for cmd in ran)
+    assert any(legacy in line and "0666" in line for line in said)
+
+
+def test_install_sh_handles_the_legacy_rule_too():
+    with open(os.path.join(REPO, "packaging", "install.sh")) as handle:
+        script = handle.read()
+    assert "99-redragon-m711.rules" in script
+    assert system.LEGACY_LINE in script

@@ -21,6 +21,11 @@ UDEV_RULE_DIR="/etc/udev/rules.d"
 DESKTOP_DIR="/usr/share/applications"
 
 UDEV_RULE_DEST="$UDEV_RULE_DIR/$UDEV_RULE_NAME"
+
+# The first README told people to create this file with exactly this line
+# (world-writable). Removed only when it is still exactly that line.
+LEGACY_RULE="$UDEV_RULE_DIR/99-redragon-m711.rules"
+LEGACY_LINE='SUBSYSTEM=="hidraw", ATTRS{idVendor}=="25a7", MODE="0666"'
 DESKTOP_DEST="$DESKTOP_DIR/$DESKTOP_NAME"
 
 # Directory holding this script, so it works from anywhere. The two files live
@@ -82,6 +87,18 @@ remove_file() {
     fi
 }
 
+remove_legacy_rule() {
+    [ -f "$LEGACY_RULE" ] || return 0
+    # every non-blank line must be the one we published, and it must be there
+    if [ "$(grep -v '^[[:space:]]*$' "$LEGACY_RULE" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')" = "$LEGACY_LINE" ]; then
+        say "  removing   $LEGACY_RULE (old MODE 0666 rule from an early README)"
+        rm -f "$LEGACY_RULE"
+    else
+        say "  warning: $LEGACY_RULE was edited, so it is left alone."
+        say "           If it still sets MODE=\"0666\", remove it yourself."
+    fi
+}
+
 reload_udev() {
     if ! command -v udevadm >/dev/null 2>&1; then
         say "  udevadm not found — reload udev yourself, or replug the mouse"
@@ -107,6 +124,7 @@ do_install() {
 
     say "udev rule:"
     install_file "$DATA_DIR/$UDEV_RULE_NAME" "$UDEV_RULE_DEST"
+    remove_legacy_rule
     reload_udev
 
     say "desktop entry:"
