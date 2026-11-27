@@ -25,8 +25,8 @@ does not touch it.
 From a checkout of the repository:
 
 ```bash
-pip install --user .          # core only, zero dependencies (tkinter UI)
-pip install --user '.[gui]'   # with the Qt interface (PySide6)
+pipx install --system-site-packages .   # uses the distribution's PySide6 (or tkinter)
+pipx install '.[gui]'                   # pulls PySide6 from PyPI
 ```
 
 That provides two commands:
@@ -39,14 +39,14 @@ That provides two commands:
 `python3 -m m711pro` works too — no arguments opens the GUI, arguments go to
 the CLI, same as `python3 main.py` from the source tree.
 
-> With `--user` the commands land in `~/.local/bin`. If the desktop entry shows
+> pipx puts the commands in `~/.local/bin`. If the desktop entry shows
 > up but does nothing, that directory is probably not on your session's `PATH`;
-> installing system-wide (`sudo pip install .`, or via `pipx`) avoids it.
+> `open-m711pro setup` writes the entry with the absolute path, which avoids it.
 
 For development, an editable install keeps the source tree live:
 
 ```bash
-pip install --user -e '.[gui]'
+python3 -m venv .venv && .venv/bin/pip install -e '.[gui]'
 ```
 
 ### 2. Device access and the menu entry
@@ -68,7 +68,7 @@ Running it again is safe: files that already match are left alone.
 
 ```bash
 open-m711pro setup --uninstall     # or: sudo sh packaging/install.sh --uninstall
-pip uninstall open-m711pro
+pipx uninstall open-m711pro
 ```
 
 ## Why `uaccess` instead of `MODE="0666"`

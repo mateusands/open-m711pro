@@ -409,3 +409,24 @@ def test_measure_dpi_turns_counts_over_a_distance_into_dpi():
     # 1000 counts over exactly one inch is 1000 DPI, in either direction
     assert round(tool.cpi(1000, 2.54)) == 1000
     assert round(tool.cpi(-2626, 10)) == 667    # what 0x07 should give at 10 cm
+
+
+def test_measure_dpi_drains_motion_queued_between_runs():
+    # moving the mouse back to the start of the ruler must not count
+    import importlib.util, os, struct
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "tools", "measure_dpi.py")
+    spec = importlib.util.spec_from_file_location("measure_dpi", path)
+    tool = importlib.util.module_from_spec(spec); spec.loader.exec_module(tool)
+    r, w = os.pipe()
+    os.set_blocking(r, False)
+    try:
+        os.write(w, tool.EVENT.pack(0, 0, tool.EV_REL, tool.REL_X, 500) * 3)
+        tool.drain([r])
+        try:
+            leftover = os.read(r, 1024)
+        except BlockingIOError:
+            leftover = b""
+        assert leftover == b""
+    finally:
+        os.close(r); os.close(w)

@@ -115,7 +115,9 @@ do_install() {
     # pip, and an entry pointing at 'open-m711pro-gui' did nothing for them.
     entry=$(mktemp)
     trap 'rm -f "$entry"' EXIT
-    sed "s|^Exec=.*|Exec=python3 \"$REPO_DIR/main.py\"|" \
+    # escape what sed's replacement treats specially (& and the | delimiter)
+    repo_esc=$(printf '%s' "$REPO_DIR" | sed 's/[&|\\]/\\&/g')
+    sed "s|^Exec=.*|Exec=python3 \"$repo_esc/main.py\"|" \
         "$DATA_DIR/$DESKTOP_NAME" > "$entry"
     if command -v desktop-file-validate >/dev/null 2>&1; then
         if ! desktop-file-validate "$entry"; then
@@ -144,7 +146,7 @@ do_uninstall() {
 
     say ""
     say "Done. The Python package is untouched; remove it with:"
-    say "  pip uninstall open-m711pro"
+    say "  pipx uninstall open-m711pro"
 }
 
 case "${1-}" in

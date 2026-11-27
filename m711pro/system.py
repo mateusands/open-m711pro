@@ -21,6 +21,10 @@ RULE_DEST = "/etc/udev/rules.d/" + RULE_NAME
 GUI_COMMAND = "open-m711pro-gui"
 
 
+class RunAsUser(Exception):
+    """setup was started through sudo; it must run as the desktop user."""
+
+
 def _read(name):
     with open(os.path.join(DATA_DIR, name)) as handle:
         return handle.read()
@@ -102,6 +106,10 @@ def setup(run=_run, data_home=None, is_root=None, which=shutil.which, say=print)
     """Install the udev rule (via sudo) and this user's menu entry."""
     if is_root is None:
         is_root = os.geteuid() == 0
+    if is_root and os.environ.get("SUDO_USER"):
+        # the menu entry would land in root's home, not the user's
+        raise RunAsUser("run 'open-m711pro setup' without sudo — it asks for "
+                        "sudo itself, only for the udev rule")
     say("udev rule (grants the logged-in user access to the mouse):")
     with tempfile.NamedTemporaryFile("w", suffix=".rules", delete=False) as tmp:
         tmp.write(udev_rule())

@@ -99,17 +99,24 @@ python3 main.py                # opens the interface
 ```
 
 No build step: it is plain Python. The release downloads are the same code as a
-pip package — if you took one, `pip install --user` it and run
+Python package — if you took the `.whl`, install it with
+`pipx install --system-site-packages open_m711pro-*.whl` and run
 `open-m711pro setup` instead of the second line.
 
 ## Install
 
-From a checkout of this repository:
+Installing is optional — `python3 main.py` from a checkout needs nothing. To
+get the `open-m711pro` commands on your `PATH`, use
+[pipx](https://pipx.pypa.io) from a checkout of this repository:
 
 ```bash
-pip install --user .          # core only, zero dependencies
-pip install --user '.[gui]'   # with the Qt interface (PySide6)
+pipx install --system-site-packages .   # uses your distribution's PySide6
+pipx install '.[gui]'                   # or pulls PySide6 from PyPI
 ```
+
+Plain `pip install --user` is refused on Arch, Debian 12+, Ubuntu 23.04+ and
+other distributions that mark their Python as externally managed (PEP 668);
+pipx is the supported way around that.
 
 This gives you `open-m711pro` (CLI) and `open-m711pro-gui` (graphical
 interface); `python3 -m m711pro` works as well. Running from the source tree
@@ -159,7 +166,7 @@ python3 main.py
 ```
 
 Debian splits PySide6 into per-module packages, so the name may differ between
-releases; `pip install --user PySide6` always works as a fallback. If you plan to
+releases. Without PySide6 the app still runs, with its tkinter interface. If you plan to
 use the tkinter interface instead, Debian and Ubuntu do **not** ship tkinter with
 Python by default — install `python3-tk`.
 
@@ -184,16 +191,16 @@ python3 main.py
 **Anything else**
 
 ```bash
-pip install --user 'PySide6>=6.5'
 git clone https://github.com/mateusands/open-m711pro && cd open-m711pro
+python3 -m venv .venv && .venv/bin/pip install 'PySide6>=6.5'
 sudo sh packaging/install.sh
-python3 main.py
+.venv/bin/python main.py
 ```
 
 Package names were taken from each distribution's current repositories and are
-the part of this most likely to drift; if one is wrong on your system, `pip
-install --user PySide6` is the universal path, and a pull request fixing the
-name is welcome.
+the part of this most likely to drift; if one is wrong on your system, the
+virtual environment above is the universal path (or skip PySide6 and use the
+tkinter interface), and a pull request fixing the name is welcome.
 
 ## Usage
 

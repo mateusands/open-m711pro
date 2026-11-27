@@ -110,3 +110,18 @@ def test_uninstall_removes_both():
         assert not os.path.exists(os.path.join(tmp, "applications",
                                                "open-m711pro.desktop"))
     assert ran[0] == ["sudo", "rm", "-f", "/etc/udev/rules.d/99-m711pro.rules"]
+
+
+def test_setup_refuses_to_run_under_sudo():
+    # `sudo open-m711pro setup` would write the menu entry into root's home
+    os.environ["SUDO_USER"] = "someone"
+    try:
+        try:
+            system.setup(run=lambda cmd: None, is_root=True,
+                         which=lambda name: None, say=lambda *_: None)
+        except system.RunAsUser:
+            pass
+        else:
+            raise AssertionError("setup under sudo must refuse")
+    finally:
+        del os.environ["SUDO_USER"]

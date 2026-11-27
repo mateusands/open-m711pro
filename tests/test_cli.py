@@ -415,3 +415,12 @@ def test_setup_uninstall_dispatches_to_uninstall():
 
 def test_setup_is_in_the_usage_text():
     assert " setup" in commands.USAGE
+
+
+def test_dpi_above_the_ceiling_is_not_relabelled_16000():
+    # an erased byte (0xFF) decodes to 21333; it must not pass for "16000"
+    raw = protocol.byte_to_dpi(0xFF)
+    with stubbed(read_dpi_table=Recorder(result=[raw] + [1000] * 4)):
+        out, _ = run(["dpi"])
+    assert f"stage 1: {raw} DPI (outside the known range)" in out
+    assert "stage 2: 1000 DPI" in out

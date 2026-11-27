@@ -55,6 +55,18 @@ def find_event_nodes(vid=device.VID):
     return nodes
 
 
+def drain(fds):
+    """Discard motion queued while not measuring (e.g. carrying the mouse back
+    to the start of the ruler), so it does not leak into the next run."""
+    for fd in fds:
+        while select.select([fd], [], [], 0)[0]:
+            try:
+                if not os.read(fd, EVENT.size * 64):
+                    break
+            except BlockingIOError:
+                break
+
+
 def sum_motion(fds, stop_fd):
     """Accumulate REL_X/REL_Y from `fds` until a line arrives on `stop_fd`."""
     x = y = 0
@@ -97,6 +109,7 @@ def main(argv):
         line = sys.stdin.readline()
         if not line or line.strip().lower() == "q":
             break
+        drain(fds)
         print("  measuring... (Enter when you reach the mark)")
         x, y = sum_motion(fds, stdin)
         counts = max(abs(x), abs(y))          # whichever axis you moved along

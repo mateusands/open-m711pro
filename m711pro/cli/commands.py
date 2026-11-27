@@ -78,6 +78,19 @@ DPI_USAGE = ("Usage: " + PROG + " dpi                  # show the stages\n"
              "       " + PROG + " dpi <stage> <value> # change one stage")
 
 
+def _describe(dpi):
+    """A DPI decoded from the mouse, shown the way the official app shows it.
+
+    byte -> DPI -> byte is the identity only up to the ceiling 0xBD; a byte
+    above it (never written by the app — e.g. an erased 0xFF) would otherwise
+    be relabelled "16000". Those keep their raw decoded value.
+    """
+    b = protocol.dpi_to_byte(dpi)
+    if protocol.byte_to_dpi(b) != dpi:
+        return f"{dpi} DPI (outside the known range)"
+    return protocol.dpi_text(b)
+
+
 def _cmd_dpi(argv):
     """`dpi` shows; `dpi <value>` unifies; `dpi <stage> <value>` changes one."""
     if not argv:
@@ -86,9 +99,7 @@ def _cmd_dpi(argv):
             raise SystemExit("Error: could not read the DPI from the mouse — "
                              "is the dongle plugged in and the device free?")
         for i, dpi in enumerate(table, 1):
-            # read_dpi_table decodes the real value; byte -> DPI -> byte is the
-            # identity below the ceiling, so the app-style label is recoverable
-            print(f"  stage {i}: {protocol.dpi_text(protocol.dpi_to_byte(dpi))}")
+            print(f"  stage {i}: {_describe(dpi)}")
         if len(set(table)) == 1:
             print("  (all five equal: the mouse's DPI button changes nothing)")
         return
@@ -115,8 +126,7 @@ def _cmd_dpi(argv):
     print(f"Stage {stage} = {protocol.dpi_text(byte)} (via {', '.join(routes)})")
     if protocol.dpi_display(byte) != requested:
         print(f"  (you asked for {requested}; the hardware step is ~83 DPI)")
-    print("  table: " + " . ".join(
-        str(protocol.dpi_display(protocol.dpi_to_byte(d))) for d in table))
+    print("  table: " + " . ".join(_describe(d) for d in table))
 
 
 def _cmd_dpi_effect(argv):
@@ -275,6 +285,8 @@ def _cmd_setup(args):
     except FileNotFoundError as exc:
         raise SystemExit(f"Error: {exc.filename} not found — install the "
                          "udev rule by hand, see the README")
+    except system.RunAsUser as exc:
+        raise SystemExit(f"Error: {exc}")
     raise SystemExit(f"Usage: {PROG} setup [--uninstall]")
 
 
