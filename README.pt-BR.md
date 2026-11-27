@@ -248,6 +248,27 @@ open-m711pro button 9 media:mute
 > número que você digitou continuar na tela e o real continuar visível. 1000,
 > 2000, 4000 e 8000 são exatos.
 
+## Colocar no menu de aplicativos
+
+Os dois instaladores acima já criam o atalho no menu. Para criar **só** o atalho
+— sem regra udev e sem sudo — crie-o para o seu usuário, apontando para o seu
+clone:
+
+```bash
+cat > ~/.local/share/applications/open-m711pro.desktop <<EOF
+[Desktop Entry]
+Type=Application
+Name=open-m711pro
+Comment=Configure o mouse Redragon M711 Pro
+Exec=python3 "$PWD/main.py"
+Icon=input-mouse
+Categories=Settings;HardwareSettings;
+EOF
+```
+
+Rode de dentro da pasta do clone (o comando usa o `$PWD`). Para tirar o atalho,
+apague o arquivo.
+
 ## Problemas comuns
 
 | Mensagem | Causa e solução |

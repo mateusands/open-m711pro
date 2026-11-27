@@ -8,6 +8,10 @@ docs/
 # AI assistant configuration (kept locally, not published)
 .claude/
 CLAUDE.md
+AGENTS.md
+
+# Personal launch scripts (the README explains how to add a menu entry)
+iniciar.sh
 
 # Python
 __pycache__/

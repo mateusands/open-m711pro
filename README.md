@@ -244,6 +244,26 @@ open-m711pro button 9 media:mute
 > — so the number you typed stays on screen and the real one is still visible.
 > 1000, 2000, 4000 and 8000 are exact.
 
+## Adding it to the application menu
+
+Both installers above already add the menu entry. To add **only** the entry —
+no udev rule, no sudo — create it for your user, pointing at your checkout:
+
+```bash
+cat > ~/.local/share/applications/open-m711pro.desktop <<EOF
+[Desktop Entry]
+Type=Application
+Name=open-m711pro
+Comment=Configure the Redragon M711 Pro mouse
+Exec=python3 "$PWD/main.py"
+Icon=input-mouse
+Categories=Settings;HardwareSettings;
+EOF
+```
+
+Run it from inside the checkout (it records `$PWD`). Delete the file to remove
+the entry.
+
 ## Troubleshooting
 
 | Message | Cause and fix |
