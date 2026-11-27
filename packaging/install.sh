@@ -3,7 +3,7 @@
 # open-m711pro — system integration installer.
 #
 # Installs two files and nothing else:
-#   /etc/udev/rules.d/99-m711pro.rules      device access for the logged-in user
+#   /etc/udev/rules.d/70-m711pro.rules      device access for the logged-in user
 #   /usr/share/applications/open-m711pro.desktop   application menu entry
 #
 # It does NOT install the Python package; use pip for that (see packaging/README.md).
@@ -14,17 +14,29 @@
 #
 set -eu
 
-UDEV_RULE_NAME="99-m711pro.rules"
+# Must sort before 73-seat-late.rules, where systemd applies uaccess. Earlier
+# versions installed 99-m711pro.rules, which tagged the device too late.
+UDEV_RULE_NAME="70-m711pro.rules"
+PREVIOUS_RULE_NAME="99-m711pro.rules"
 DESKTOP_NAME="open-m711pro.desktop"
 
-UDEV_RULE_DIR="/etc/udev/rules.d"
-DESKTOP_DIR="/usr/share/applications"
+# Overridable so the test suite can run this script for real in a sandbox.
+UDEV_RULE_DIR="${UDEV_RULE_DIR:-/etc/udev/rules.d}"
+DESKTOP_DIR="${DESKTOP_DIR:-/usr/share/applications}"
 
 UDEV_RULE_DEST="$UDEV_RULE_DIR/$UDEV_RULE_NAME"
+
+# The first README told people to create this file with exactly this line
+# (world-writable). Removed only when it is still exactly that line.
+LEGACY_RULE="$UDEV_RULE_DIR/99-redragon-m711.rules"
+LEGACY_LINE='SUBSYSTEM=="hidraw", ATTRS{idVendor}=="25a7", MODE="0666"'
 DESKTOP_DEST="$DESKTOP_DIR/$DESKTOP_NAME"
 
-# Directory holding this script, so it works from anywhere.
+# Directory holding this script, so it works from anywhere. The two files live
+# inside the Python package (m711pro/data/) so pip installs carry them too.
 SRC_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_DIR=$(dirname -- "$SRC_DIR")
+DATA_DIR="$REPO_DIR/m711pro/data"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -44,6 +56,7 @@ EOF
 }
 
 require_root() {
+    [ "${M711_INSTALL_SKIP_ROOT-}" = 1 ] && return 0     # sandboxed test run
     # id -u is POSIX; 0 is root.
     if [ "$(id -u)" -ne 0 ]; then
         die "this needs root to write to /etc and /usr/share — re-run with sudo"
@@ -79,6 +92,18 @@ remove_file() {
     fi
 }
 
+remove_legacy_rule() {
+    [ -f "$LEGACY_RULE" ] || return 0
+    # every non-blank line must be the one we published, and it must be there
+    if [ "$(grep -v '^[[:space:]]*$' "$LEGACY_RULE" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')" = "$LEGACY_LINE" ]; then
+        say "  removing   $LEGACY_RULE (old MODE 0666 rule from an early README)"
+        rm -f "$LEGACY_RULE"
+    else
+        say "  warning: $LEGACY_RULE was edited, so it is left alone."
+        say "           If it still sets MODE=\"0666\", remove it yourself."
+    fi
+}
+
 reload_udev() {
     if ! command -v udevadm >/dev/null 2>&1; then
         say "  udevadm not found — reload udev yourself, or replug the mouse"
@@ -103,22 +128,38 @@ do_install() {
     say "open-m711pro: installing system integration"
 
     say "udev rule:"
-    install_file "$SRC_DIR/$UDEV_RULE_NAME" "$UDEV_RULE_DEST"
+    install_file "$DATA_DIR/$UDEV_RULE_NAME" "$UDEV_RULE_DEST"
+    if [ -f "$UDEV_RULE_DIR/$PREVIOUS_RULE_NAME" ]; then
+        say "  removing   $UDEV_RULE_DIR/$PREVIOUS_RULE_NAME (ran after 73-seat-late, never applied)"
+        rm -f "$UDEV_RULE_DIR/$PREVIOUS_RULE_NAME"
+    fi
+    remove_legacy_rule
     reload_udev
 
     say "desktop entry:"
+    # The entry runs main.py from this checkout, which works whether or not the
+    # package was pip-installed: the README's per-distribution steps never run
+    # pip, and an entry pointing at 'open-m711pro-gui' did nothing for them.
+    # in a temp DIRECTORY, so the file keeps its .desktop name: the validator
+    # rejects a file without that extension
+    tmpdir=$(mktemp -d)
+    trap 'rm -rf "$tmpdir"' EXIT
+    entry="$tmpdir/$DESKTOP_NAME"
+    # escape what sed's replacement treats specially (& and the | delimiter)
+    repo_esc=$(printf '%s' "$REPO_DIR" | sed 's/[&|\\]/\\&/g')
+    sed "s|^Exec=.*|Exec=python3 \"$repo_esc/main.py\"|" \
+        "$DATA_DIR/$DESKTOP_NAME" > "$entry"
     if command -v desktop-file-validate >/dev/null 2>&1; then
-        if ! desktop-file-validate "$SRC_DIR/$DESKTOP_NAME"; then
-            die "the .desktop file failed validation; nothing was installed"
+        if ! desktop-file-validate "$entry"; then
+            die "the menu entry failed validation and was not installed (the udev rule above was)"
         fi
     fi
-    install_file "$SRC_DIR/$DESKTOP_NAME" "$DESKTOP_DEST"
+    install_file "$entry" "$DESKTOP_DEST"
     refresh_desktop_db
 
     say ""
     say "Done. Replug the mouse (or the 2.4G dongle) so the new rule applies."
-    say "The menu entry runs 'open-m711pro-gui', which comes from the Python"
-    say "package — install it with:  pip install '.[gui]'"
+    say "The menu entry runs $REPO_DIR/main.py — keep this checkout where it is."
 }
 
 do_uninstall() {
@@ -127,6 +168,7 @@ do_uninstall() {
 
     say "udev rule:"
     remove_file "$UDEV_RULE_DEST"
+    remove_file "$UDEV_RULE_DIR/$PREVIOUS_RULE_NAME"
     reload_udev
 
     say "desktop entry:"
@@ -135,7 +177,7 @@ do_uninstall() {
 
     say ""
     say "Done. The Python package is untouched; remove it with:"
-    say "  pip uninstall open-m711pro"
+    say "  pipx uninstall open-m711pro"
 }
 
 case "${1-}" in

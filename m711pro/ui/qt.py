@@ -9,15 +9,18 @@ The core (m711pro.core) stays pure stdlib; only this GUI uses Qt.
 import math
 import colorsys
 
-from PySide6.QtCore import Qt, Signal, QRectF, QPointF
+from PySide6.QtCore import (Qt, Signal, QRectF, QPointF, QTimer, QTranslator,
+                            QLibraryInfo)
 from PySide6.QtGui import QPainter, QColor, QConicalGradient, QRadialGradient, QBrush, QPen
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout,
     QLabel, QComboBox, QSlider, QPushButton, QFrame, QStackedWidget, QColorDialog,
-    QSpinBox, QScrollArea,
+    QSpinBox, QScrollArea, QCheckBox, QAbstractSpinBox, QStyle, QStyleOptionButton,
 )
 
 from ..core import device, state, protocol
+from ..data.hid_keys import KEYS
+from .i18n import tr, tr_error, LANGUAGES, language, set_language
 
 ACCENT = "#19b8c8"
 BORDER_COLOR = "#2a2e38"
@@ -43,6 +46,9 @@ QComboBox {{
     background: #20242e; color: #e8eaed; border: 1px solid #2a2e38;
     border-radius: 6px; padding: 6px 10px; min-width: 180px;
 }}
+QComboBox::drop-down {{ border: none; width: 26px; }}
+QComboBox::down-arrow {{ image: none; width: 0; height: 0; }}
+QComboBox:hover {{ border: 1px solid #3a3f4a; }}
 QComboBox QAbstractItemView {{
     background: #20242e; color: #e8eaed; selection-background-color: {ACCENT};
 }}
@@ -58,10 +64,13 @@ QSlider::handle:horizontal {{
 QSlider::sub-page:horizontal {{ background: {ACCENT}; border-radius: 3px; }}
 QSpinBox {{
     background: #20242e; color: #e8eaed; border: 1px solid #2a2e38;
-    border-radius: 6px; padding: 5px 8px; min-width: 92px;
+    border-radius: 6px; padding: 6px 10px; min-width: 64px; font-size: 13px;
 }}
 QSpinBox:focus {{ border: 1px solid {ACCENT}; }}
 QComboBox#media {{ min-width: 120px; }}
+QComboBox#buttonAction {{ min-width: 140px; }}
+QComboBox#mods {{ min-width: 84px; }}
+QComboBox#key {{ min-width: 64px; }}
 QComboBox:disabled {{ color: #5a5f68; border: 1px solid #23262e; }}
 QScrollArea#rows, QWidget#rowsBody {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
@@ -70,6 +79,26 @@ QScrollBar::handle:vertical:hover {{ background: #3a3f4a; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QWidget[focused="true"] {{ background: #171a21; border-radius: 6px; }}
 QPushButton#swatch {{ border: 1px solid #2a2e38; border-radius: 4px; }}
+QPushButton#preset {{
+    background: #20242e; color: #c9ccd1; border: 1px solid #2a2e38;
+    border-radius: 13px; padding: 4px 12px; font-size: 12px;
+}}
+QPushButton#preset:hover {{ border: 1px solid {ACCENT}; color: #e8eaed; }}
+QPushButton#preset:disabled {{ color: #5a5f68; }}
+QLabel#unit {{ color: #8b9098; font-size: 12px; }}
+QPushButton#lang {{
+    background: transparent; color: #8b9098; border: 1px solid #2a2e38;
+    border-radius: 11px; padding: 3px 10px; font-size: 11px;
+}}
+QPushButton#lang:hover {{ color: #e8eaed; }}
+QPushButton#lang:checked {{ color: {ACCENT}; border: 1px solid {ACCENT}; }}
+QCheckBox {{ color: #e8eaed; spacing: 8px; }}
+QCheckBox:disabled {{ color: #5a5f68; }}
+QCheckBox::indicator {{
+    width: 16px; height: 16px; border: 1px solid #3a3f4a; border-radius: 4px;
+    background: #20242e;
+}}
+QCheckBox::indicator:checked {{ background: {ACCENT}; border: 1px solid {ACCENT}; }}
 QLabel#statusbar {{ background: #191c24; color: #8b9098; padding: 7px 12px; }}
 """
 
@@ -101,6 +130,81 @@ def _combo_pick_raw(combo, base, text):
         item.setEnabled(False)
     combo.setCurrentIndex(base)
     combo.blockSignals(False)
+
+
+# ---------------------------------------------------------------------------
+# Controls that ignore the mouse wheel. Qt changes a combo or slider when the
+# page is scrolled with the pointer over it, and on these pages a changed
+# control is a WRITE to the mouse — so the wheel is handed back to the page,
+# which scrolls instead.
+class Combo(QComboBox):
+    def wheelEvent(self, e):
+        e.ignore()
+
+    def paintEvent(self, e):
+        # the stylesheet hides Qt's arrow (it rendered as a dark block); draw
+        # a plain chevron instead
+        super().paintEvent(e)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QPen(QColor("#8b9098" if self.isEnabled() else "#4a4f58"), 1.6))
+        x, y = self.width() - 18, self.height() / 2
+        p.drawLine(QPointF(x - 4, y - 2), QPointF(x, y + 2))
+        p.drawLine(QPointF(x, y + 2), QPointF(x + 4, y - 2))
+        p.end()
+
+
+class Slider(QSlider):
+    """A horizontal slider that ignores the wheel and reports *settled* moves.
+
+    `settled` fires when the handle is released, and — after a short pause —
+    when the value moved without a drag (a click on the groove, the arrow
+    keys). Committing only on release left those moves on screen but never
+    sent, so the page showed a value the mouse did not have.
+    """
+    settled = Signal()
+    DEBOUNCE_MS = 350
+
+    def __init__(self):
+        super().__init__(Qt.Horizontal)
+        self._timer = QTimer(self); self._timer.setSingleShot(True)
+        self._timer.setInterval(self.DEBOUNCE_MS)
+        self._timer.timeout.connect(self.settled)
+        # actionTriggered fires for USER actions only (keys, groove clicks) —
+        # never for setValue/setRange, so loading a page cannot send anything.
+        self.actionTriggered.connect(self._acted)
+        self.sliderReleased.connect(self._released)
+
+    def _acted(self, action):
+        if action != QSlider.SliderMove:       # a drag ends in sliderReleased
+            self._timer.start()
+
+    def _released(self):
+        self._timer.stop()
+        self.settled.emit()
+
+    def wheelEvent(self, e):
+        e.ignore()
+
+
+class CheckBox(QCheckBox):
+    """A checkbox whose ticked state shows a check mark, not only a colour."""
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if not self.isChecked():
+            return
+        opt = QStyleOptionButton(); self.initStyleOption(opt)
+        box = self.style().subElementRect(QStyle.SE_CheckBoxIndicator, opt, self)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor("#0b0d11" if self.isEnabled() else "#3a3e47"), 2.2)
+        pen.setCapStyle(Qt.RoundCap); pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        x, y, w, h = box.x(), box.y(), box.width(), box.height()
+        p.drawLine(QPointF(x + w * 0.24, y + h * 0.52), QPointF(x + w * 0.43, y + h * 0.72))
+        p.drawLine(QPointF(x + w * 0.43, y + h * 0.72), QPointF(x + w * 0.78, y + h * 0.30))
+        p.end()
 
 
 # ---------------------------------------------------------------------------
@@ -194,12 +298,17 @@ class LightingPage(QWidget):
         self.setObjectName("page")
         root = QVBoxLayout(self); root.setContentsMargins(26, 22, 26, 22); root.setSpacing(14)
 
-        t = QLabel("LIGHTING"); t.setObjectName("title"); root.addWidget(t)
+        t = QLabel(tr("LIGHTING")); t.setObjectName("title"); root.addWidget(t)
 
         er = QHBoxLayout()
-        lbl = QLabel("EFFECT"); lbl.setObjectName("muted"); er.addWidget(lbl)
-        self.effect = QComboBox(); self.effect.addItems(EFFECTS)
-        self.effect.currentTextChanged.connect(self._on_effect)
+        lbl = QLabel(tr("EFFECT")); lbl.setObjectName("muted"); er.addWidget(lbl)
+        # The item DATA is the effect key the device layer dispatches on; only
+        # the painted text is translated.
+        self.effect = Combo()
+        for key in EFFECTS:
+            self.effect.addItem(tr(key), key)
+        self.effect.currentIndexChanged.connect(
+            lambda _i: self._on_effect(self._effect_key()))
         er.addWidget(self.effect); er.addStretch(); root.addLayout(er)
 
         body = QHBoxLayout(); body.setSpacing(24)
@@ -215,19 +324,19 @@ class LightingPage(QWidget):
         self.readout = QLabel("—"); self.readout.setStyleSheet("font-weight:600;")
         right.addWidget(self.readout)
 
-        bl = QLabel("BRIGHTNESS"); bl.setObjectName("muted"); right.addWidget(bl)
-        self.bright = QSlider(Qt.Horizontal); self.bright.setRange(15, 100)
+        bl = QLabel(tr("BRIGHTNESS")); bl.setObjectName("muted"); right.addWidget(bl)
+        self.bright = Slider(); self.bright.setRange(15, 100)
         self.bright.setValue(100); self.bright.setFixedWidth(180)
         self.bright.valueChanged.connect(self._on_bright)
-        self.bright.sliderReleased.connect(self._commit_current)
+        self.bright.settled.connect(self._commit_current)
         right.addWidget(self.bright)
 
         # Speed — only shown for animated effects
-        self.speed_label = QLabel("SPEED (Slow -> Fast)")
+        self.speed_label = QLabel(tr("SPEED (Slow -> Fast)"))
         self.speed_label.setObjectName("muted"); right.addWidget(self.speed_label)
-        self.speed = QSlider(Qt.Horizontal); self.speed.setRange(0, 100)
+        self.speed = Slider(); self.speed.setRange(0, 100)
         self.speed.setValue(50); self.speed.setFixedWidth(180)
-        self.speed.sliderReleased.connect(self._commit_current)
+        self.speed.settled.connect(self._commit_current)
         right.addWidget(self.speed)
 
         pr = QGridLayout(); pr.setSpacing(4)
@@ -238,7 +347,7 @@ class LightingPage(QWidget):
             pr.addWidget(sw, 0, i)
         right.addLayout(pr)
 
-        custom = QPushButton("Custom colour…"); custom.setObjectName("action")
+        custom = QPushButton(tr("Custom colour…")); custom.setObjectName("action")
         custom.clicked.connect(self._pick_custom); right.addWidget(custom)
         right.addStretch()
         body.addLayout(right); body.addStretch()
@@ -279,8 +388,11 @@ class LightingPage(QWidget):
     def _preview(self, r, g, b):
         self._refresh(r, g, b)
 
+    def _effect_key(self):
+        return self.effect.currentData()
+
     def _send_fn(self):
-        return device.sender_for(self.effect.currentText())
+        return device.sender_for(self._effect_key())
 
     def _speed_byte(self):
         # slider 0% (slow) -> 100% (fast); a lower byte is faster (0xF0..0x08)
@@ -288,7 +400,7 @@ class LightingPage(QWidget):
         return int(round(0xF0 - pct / 100 * (0xF0 - 0x08)))
 
     def _commit(self, r, g, b):
-        eff = self.effect.currentText()
+        eff = self._effect_key()
         fn = self._send_fn()
         if fn is None:
             return
@@ -299,7 +411,9 @@ class LightingPage(QWidget):
             call = lambda: fn(r, g, b, brightness=bb, speed=sp)
         else:
             call = lambda: fn(r, g, b, brightness=bb)
-        self._send(call, f"{eff} #{r:02X}{g:02X}{b:02X} ({self._bright_pct()}%)")
+        self._send(call, tr("{effect} {colour} ({pct}%)", effect=tr(eff),
+                              colour=f"#{r:02X}{g:02X}{b:02X}",
+                              pct=self._bright_pct()))
 
     def _commit_rgb(self, r, g, b):
         h, s, _ = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
@@ -326,8 +440,8 @@ class LightingPage(QWidget):
         self.no_color.setVisible(not has_color)
         self._speed_visible(eff)
         if eff == "Off":
-            self.no_color.setText("Lighting is off.")
-            self._send(device.send_off, "LED off")
+            self.no_color.setText(tr("Lighting is off."))
+            self._send(device.send_off, tr("LED off"))
         elif has_color:
             self.no_color.setText("")
             self._commit_current()
@@ -336,7 +450,7 @@ class LightingPage(QWidget):
             self.status.emit(f"'{eff}' is not implemented yet.", False)
 
     def _pick_custom(self):
-        c = QColorDialog.getColor(parent=self, title="Pick a colour")
+        c = QColorDialog.getColor(parent=self, title=tr("Pick a colour"))
         if c.isValid():
             self._commit_rgb(c.red(), c.green(), c.blue())
 
@@ -365,34 +479,53 @@ class LightingPage(QWidget):
         if eff not in EFFECTS:
             eff = "Steady"
         self.effect.blockSignals(True)          # reflect without triggering a send
-        self.effect.setCurrentText(eff)
+        self.effect.setCurrentIndex(self.effect.findData(eff))
         self.effect.blockSignals(False)
         has_color = eff in COLOR_EFFECTS
         self.color_area.setVisible(has_color)
         self.no_color.setVisible(not has_color)
         self._speed_visible(eff)
         if not has_color:
-            self.no_color.setText("Lighting is off." if eff == "Off"
+            self.no_color.setText(tr("Lighting is off.") if eff == "Off"
                                   else f"'{eff}' is not implemented yet.")
 
     def _send(self, fn, ok):
         try:
             vias = fn()
-            self.status.emit(f"{ok} — via {', '.join(vias)}", False)
+            self.status.emit(tr("{what} — via {routes}", what=ok,
+                                routes=", ".join(vias)), False)
         except device.DeviceNotFound as exc:
-            self.status.emit(f"Error: {exc}", True)
+            self.status.emit(tr("Error: {error}", error=tr_error(exc)), True)
 
 
 class DpiSpinBox(QSpinBox):
     """A DPI field whose arrows move ONE hardware step (~83 DPI).
 
-    With a fixed step of 100 the arrows land on values the mouse cannot hold
-    (700 becomes 667). Stepping byte by byte, every value shown really exists.
+    Stepping byte by byte, every value shown is one the mouse can hold. Values
+    are shown as the official app labels them (700, not the 667 the step
+    decodes to); the row's note carries the real value.
     """
+    def __init__(self):
+        super().__init__()
+        # Only the number is editable: the unit lives in a label beside it.
+        # With " DPI" as a suffix the cursor landed after the unit and clearing
+        # the field meant fighting it.
+        self.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.setRange(protocol.DPI_MIN, protocol.DPI_MAX)
+        self.setFixedWidth(84)
+
     def stepBy(self, steps):
         b = protocol.dpi_to_byte(self.value()) + steps
         b = max(0, min(protocol.DPI_BYTE_MAX, b))
-        self.setValue(protocol.byte_to_dpi(b))
+        self.setValue(protocol.dpi_display(b))
+
+    def focusInEvent(self, e):
+        super().focusInEvent(e)
+        QTimer.singleShot(0, self.selectAll)     # click, type, Enter
+
+    def wheelEvent(self, e):
+        e.ignore()
 
 
 class DpiRow(QWidget):
@@ -418,37 +551,49 @@ class DpiRow(QWidget):
             self.color = QPushButton()
             self.color.setObjectName("swatch")
             self.color.setFixedSize(22, 22)
-            self.color.setToolTip("Stage colour — the LED shows it when this "
-                                  "stage is active")
+            self.color.setToolTip(tr("Stage colour — the LED shows it when this "
+                                     "stage is active"))
             self.color.clicked.connect(self.color_clicked)
             lay.addWidget(self.color)
 
-        self.slider = QSlider(Qt.Horizontal)
+        self.slider = Slider()
         self.slider.setRange(0, protocol.DPI_BYTE_MAX)
         self.spin = DpiSpinBox()
-        self.spin.setRange(protocol.DPI_MIN, protocol.DPI_MAX)
-        self.spin.setSuffix(" DPI")
+        unit = QLabel("DPI"); unit.setObjectName("unit")
         # Y axis, hidden unless the user asks for independent axes.
+        self.y_label = QLabel("Y"); self.y_label.setObjectName("unit")
         self.spin_y = DpiSpinBox()
-        self.spin_y.setRange(protocol.DPI_MIN, protocol.DPI_MAX)
-        self.spin_y.setPrefix("Y "); self.spin_y.setSuffix(" DPI")
-        self.spin_y.setVisible(False)
+        self.y_label.setVisible(False); self.spin_y.setVisible(False)
         self.spin_y.editingFinished.connect(self.edited)
-        lay.addWidget(self.slider, 1); lay.addWidget(self.spin); lay.addWidget(self.spin_y)
+        # The real value, when the app-style label rounds it (700 -> ≈667).
+        self.real = QLabel(""); self.real.setObjectName("muted")
+        self.real.setFixedWidth(76)
+        lay.addWidget(self.slider, 1); lay.addWidget(self.spin)
+        lay.addWidget(unit); lay.addWidget(self.real)
+        lay.addWidget(self.y_label); lay.addWidget(self.spin_y)
 
-        self.slider.valueChanged.connect(
-            lambda v: self._set_spin(protocol.byte_to_dpi(v)))
-        self.slider.sliderReleased.connect(self.edited)
+        self.slider.valueChanged.connect(self._show_byte)
+        self.slider.settled.connect(self.edited)
         self.spin.editingFinished.connect(self._from_spin)
         self.setEnabled(False)
 
     def _from_spin(self):
         b = protocol.dpi_to_byte(self.spin.value())
         self._set_slider(b)
-        self._set_spin(protocol.byte_to_dpi(b))    # echo the quantised value
+        self._show_byte(b)                          # echo the quantised value
         if not self.spin_y.isVisible():
-            self._set_spin_y(protocol.byte_to_dpi(b))
+            self._set_spin_y(protocol.dpi_display(b))
         self.edited.emit()
+
+    def _show_byte(self, b):
+        self._set_spin(protocol.dpi_display(b))
+        real = protocol.byte_to_dpi(b)
+        self.real.setText("" if real == protocol.dpi_display(b)
+                          else tr("≈{real} real", real=real))
+        self.real.setToolTip("" if not self.real.text() else
+                             tr("The mouse stores DPI in steps of ~83; this is the "
+                                "value it really holds. The official app shows the "
+                                "rounded number."))
 
     def _set_spin(self, dpi):
         self.spin.blockSignals(True)
@@ -468,8 +613,8 @@ class DpiRow(QWidget):
     def set_byte(self, b, y=None):
         """Show a stage. `y` is the Y-axis byte when it differs from X."""
         self._set_slider(b)
-        self._set_spin(protocol.byte_to_dpi(b))
-        self._set_spin_y(protocol.byte_to_dpi(b if y is None else y))
+        self._show_byte(b)
+        self._set_spin_y(protocol.dpi_display(b if y is None else y))
 
     def byte(self):
         return self.slider.value()
@@ -482,6 +627,7 @@ class DpiRow(QWidget):
         return x, protocol.dpi_to_byte(self.spin_y.value())
 
     def show_y(self, flag):
+        self.y_label.setVisible(flag)
         self.spin_y.setVisible(flag)
 
     def set_color(self, rgb):
@@ -521,17 +667,17 @@ class DpiPage(QWidget):
         root = QVBoxLayout(self); root.setContentsMargins(26, 22, 26, 22); root.setSpacing(12)
 
         head = QHBoxLayout()
-        t = QLabel("SENSITIVITY (DPI)"); t.setObjectName("title")
+        t = QLabel(tr("SENSITIVITY (DPI)")); t.setObjectName("title")
         head.addWidget(t); head.addStretch()
-        btn = QPushButton("Read from mouse"); btn.setObjectName("action")
+        btn = QPushButton(tr("Read from mouse")); btn.setObjectName("action")
         btn.clicked.connect(self._reload); head.addWidget(btn)
         root.addLayout(head)
 
         mr = QHBoxLayout()
-        mr.addWidget(self._muted("MODE")); mr.addSpacing(8)
-        self.mode = QComboBox()
+        mr.addWidget(self._muted(tr("MODE"))); mr.addSpacing(8)
+        self.mode = Combo()
         for _, rotulo in self.MODES:
-            self.mode.addItem(rotulo)
+            self.mode.addItem(tr(rotulo))
         saved = state.load().get("dpi_mode", "single")
         self.mode.setCurrentIndex(
             next((i for i, (k, _) in enumerate(self.MODES) if k == saved), 0))
@@ -545,6 +691,16 @@ class DpiPage(QWidget):
         self.single = DpiRow("")
         self.single.edited.connect(self._commit_single)
         sb.addWidget(self.single)
+        # Quick picks: the slider is linear up to ~16000, so the values people
+        # actually use sit in its first fifth and are fiddly to hit.
+        pr = QHBoxLayout(); pr.setSpacing(6)
+        self.presets = {}
+        for dpi in (400, 800, 1600, 3200, 6400):
+            chip = QPushButton(str(dpi)); chip.setObjectName("preset")
+            chip.setCursor(Qt.PointingHandCursor); chip.setEnabled(False)
+            chip.clicked.connect(lambda _=False, v=dpi: self._preset(v))
+            pr.addWidget(chip); self.presets[dpi] = chip
+        pr.addStretch(); sb.addLayout(pr)
         self.single_note = QLabel(""); self.single_note.setObjectName("muted")
         self.single_note.setWordWrap(True); sb.addWidget(self.single_note)
         root.addWidget(self.single_box)
@@ -558,7 +714,7 @@ class DpiPage(QWidget):
             row.edited.connect(lambda k=i: self._commit_stage(k))
             row.color_clicked.connect(lambda k=i: self._pick_color(k))
             gb.addWidget(row); self.rows.append(row)
-        self.xy = QPushButton("Independent X / Y axes")
+        self.xy = QPushButton(tr("Independent X / Y axes"))
         self.xy.setObjectName("action"); self.xy.setCheckable(True)
         self.xy.setEnabled(False)
         self.xy.toggled.connect(self._show_xy)
@@ -566,26 +722,29 @@ class DpiPage(QWidget):
         gb.addLayout(xr)
         root.addWidget(self.stages_box)
 
-        hint = QLabel(
-            f"DPI is a single byte with a step of ~{protocol.DPI_STEP:.0f}, so 700 does "
-            "not exist (its neighbour is 667). Type any value: it snaps to the "
-            "nearest step, and the number shown is what the mouse actually holds. "
-            "Exact with no rounding: 1000, 2000, 4000, 8000.")
+        hint = QLabel(tr(
+            "Type a value and press Enter, drag the slider, or pick a preset. "
+            "The mouse works in steps of ~{step} DPI: values are "
+            "shown the way the official app shows them, with the real one beside "
+            "them when it differs (700 is really ≈667).",
+            step=f"{protocol.DPI_STEP:.0f}"))
         hint.setObjectName("muted"); hint.setWordWrap(True); root.addWidget(hint)
 
-        root.addWidget(self._muted("DPI STAGE INDICATOR (DPI EFFECT)"))
-        self.effect_btn = QPushButton("—"); self.effect_btn.setObjectName("action")
-        self.effect_btn.setCheckable(True); self.effect_btn.setEnabled(False)
+        root.addSpacing(6)
+        root.addWidget(self._muted(tr("DPI STAGE INDICATOR")))
+        self.effect_btn = CheckBox(tr("Light the LED in the active stage's colour "
+                                       "(DPI Effect)"))
+        self.effect_btn.setEnabled(False)
         self.effect_btn.clicked.connect(self._toggle_effect)
-        er = QHBoxLayout(); er.addWidget(self.effect_btn); er.addStretch()
-        root.addLayout(er)
+        root.addWidget(self.effect_btn)
+        root.addSpacing(6)
 
         # --- USB polling rate (register 0x0000) ---
         # The choices come from protocol.POLLING_RATES so the page cannot drift
         # from the rates the protocol can actually build.
         pol = QHBoxLayout()
-        pol.addWidget(self._muted("POLLING RATE (Hz)")); pol.addSpacing(8)
-        self.polling = QComboBox()
+        pol.addWidget(self._muted(tr("POLLING RATE (Hz)"))); pol.addSpacing(8)
+        self.polling = Combo()
         for hz in self._polling_rates:
             self.polling.addItem(f"{hz} Hz")
         self.polling.setEnabled(False)          # only a successful read wakes it
@@ -613,14 +772,14 @@ class DpiPage(QWidget):
         if self._mode_key() != "single" or not self._loaded:
             return
         if len(set(self._raw)) > 1:
-            current = " · ".join(str(protocol.byte_to_dpi(b)) for b in self._raw)
-            self.single_note.setText(
-                f"The five stages still differ ({current}). Confirm a value above to "
-                "make them all equal.")
+            current = " · ".join(str(protocol.dpi_display(b)) for b in self._raw)
+            self.single_note.setText(tr(
+                "The five stages still differ ({current}). Confirm a value above to "
+                "make them all equal.", current=current))
         else:
-            self.single_note.setText(
+            self.single_note.setText(tr(
                 "All five stages are equal — the mouse's DPI button cycles without "
-                "changing the sensitivity.")
+                "changing the sensitivity."))
 
     # -- loading (only the first time the page is shown: the read is slow) --
     def ensure_loaded(self):
@@ -635,11 +794,11 @@ class DpiPage(QWidget):
             eff = device.read_dpi_effect()
             hz, code = device.read_polling()
         except device.DeviceNotFound as exc:
-            self._enable(False); self.status.emit(f"Error: {exc}", True)
+            self._enable(False); self.status.emit(tr("Error: {error}", error=tr_error(exc)), True)
             return
         if raw is None:
             self._enable(False)
-            self.status.emit("Could not read the DPI — did the mouse answer?", True)
+            self.status.emit(tr("Could not read the DPI — did the mouse answer?"), True)
             return
         self._raw = list(raw)
         self._axes = list(axes)
@@ -658,10 +817,10 @@ class DpiPage(QWidget):
         self._loaded = True
         self._update_single_note()
         if code is None:
-            self.status.emit("DPI read from the mouse — the polling rate did "
-                             "not answer.", True)
+            self.status.emit(tr("DPI read from the mouse — the polling rate did "
+                                "not answer."), True)
         else:
-            self.status.emit("DPI read from the mouse.", False)
+            self.status.emit(tr("DPI read from the mouse."), False)
 
     def _enable(self, flag):
         for row in self.rows:            # DpiPage keeps a list, one per stage
@@ -669,12 +828,13 @@ class DpiPage(QWidget):
         self.xy.setEnabled(flag)
         self.single.setEnabled(flag)
         self.effect_btn.setEnabled(flag)
+        for chip in self.presets.values():
+            chip.setEnabled(flag)
         if not flag:
             self.polling.setEnabled(False)   # only its own read wakes it again
 
     def _show_effect(self, on):
         self.effect_btn.setChecked(on)
-        self.effect_btn.setText("On" if on else "Off")
 
     def _show_polling(self, hz, code):
         """Make the combo reflect the rate we believe the register holds.
@@ -707,19 +867,19 @@ class DpiPage(QWidget):
     def _pick_color(self, k):
         """Pick the LED colour the mouse shows while stage `k` is active."""
         chosen = QColorDialog.getColor(QColor(*self._colors[k]), self,
-                                       f"Stage {k + 1} colour")
+                                       tr("Stage {n} colour", n=k + 1))
         if not chosen.isValid():
             return
         rgb = (chosen.red(), chosen.green(), chosen.blue())
         try:
             _, colors = device.send_dpi_color(k + 1, rgb)
         except (device.DeviceNotFound, ValueError) as exc:
-            self.status.emit(f"Error: {exc}", True)
+            self.status.emit(tr("Error: {error}", error=tr_error(exc)), True)
             return
         self._colors = [tuple(c) for c in colors]
         self.rows[k].set_color(rgb)
-        self.status.emit(f"Stage {k + 1} colour = "
-                         f"#{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}", False)
+        self.status.emit(tr("Stage {n} colour = {colour}", n=k + 1,
+                            colour=f"#{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}"), False)
 
     # -- sending --------------------------------------------------------------
     def _send(self, entries, msg):
@@ -731,17 +891,22 @@ class DpiPage(QWidget):
         try:
             vias = device.send_dpi_bytes(entries)
         except device.DeviceNotFound as exc:
-            self.status.emit(f"Error: {exc}", True)
+            self.status.emit(tr("Error: {error}", error=tr_error(exc)), True)
             return
         self._axes = [protocol.axis_pair(e) for e in entries]
         self._raw = [x for x, _ in self._axes]
         self._update_single_note()
-        self.status.emit(f"{msg} — via {', '.join(vias)}", False)
+        self.status.emit(tr("{what} — via {routes}", what=msg,
+                            routes=", ".join(vias)), False)
+
+    def _preset(self, dpi):
+        self.single.set_byte(protocol.dpi_to_byte(dpi))
+        self._commit_single()
 
     def _commit_single(self):
         b = self.single.byte()
         self._send([b] * protocol.DPI_STAGES,
-                   f"DPI = {protocol.byte_to_dpi(b)} on all five stages")
+                   tr("DPI = {dpi} on all five stages", dpi=protocol.dpi_text(b)))
 
     def _commit_stage(self, k):
         # start from the bytes we READ, not from the sliders: a stage the slider
@@ -749,10 +914,10 @@ class DpiPage(QWidget):
         entries = list(self._axes)
         entries[k] = self.rows[k].axes()
         x, y = entries[k]
-        label = (f"Stage {k + 1} = {protocol.byte_to_dpi(x)} DPI"
+        label = (tr("Stage {n} = {dpi}", n=k + 1, dpi=protocol.dpi_text(x))
                  if x == y else
-                 f"Stage {k + 1} = X {protocol.byte_to_dpi(x)} / "
-                 f"Y {protocol.byte_to_dpi(y)} DPI")
+                 tr("Stage {n} = X {x} / Y {y}", n=k + 1,
+                    x=protocol.dpi_text(x), y=protocol.dpi_text(y)))
         self._send(entries, label)
 
     def _toggle_effect(self):
@@ -760,11 +925,12 @@ class DpiPage(QWidget):
         try:
             vias = device.send_dpi_effect(on)
             self._show_effect(on)
-            self.status.emit(f"DPI Effect {'ligado' if on else 'desligado'}"
-                             f" — via {', '.join(vias)}", False)
+            self.status.emit(tr("{what} — via {routes}",
+                                what=tr("DPI Effect on" if on else "DPI Effect off"),
+                                routes=", ".join(vias)), False)
         except device.DeviceNotFound as exc:
             self.effect_btn.setChecked(not on)      # desfaz o toggle visual
-            self.status.emit(f"Error: {exc}", True)
+            self.status.emit(tr("Error: {error}", error=tr_error(exc)), True)
 
     def _on_polling(self, index):
         if index >= len(self._polling_rates):    # the raw entry — never sent
@@ -775,11 +941,13 @@ class DpiPage(QWidget):
         except (device.DeviceNotFound, ValueError) as exc:
             # undo the visual change: back to the last rate we actually read
             self._show_polling(self._polling_hz, self._polling_raw)
-            self.status.emit(f"Error: {exc}", True)
+            self.status.emit(tr("Error: {error}", error=tr_error(exc)), True)
             return
         # adopt the new rate; this also drops the raw entry, if there was one
         self._show_polling(hz, protocol.POLLING_RATES[hz])
-        self.status.emit(f"Polling rate = {hz} Hz — via {', '.join(routes)}", False)
+        self.status.emit(tr("{what} — via {routes}",
+                            what=tr("Polling rate = {hz} Hz", hz=hz),
+                            routes=", ".join(routes)), False)
 
     @staticmethod
     def _muted(text):
@@ -804,8 +972,26 @@ BUTTON_ACTIONS = [
     ("RGB on/off", protocol.btn_rgb_toggle()),
     ("Polling rate switch", protocol.btn_polling_switch()),
     ("Multimedia key", protocol.BTN_EXTENDED),
+    ("Keyboard key", protocol.BTN_EXTENDED),
+    ("Key combination", protocol.BTN_EXTENDED),
     ("Disabled", protocol.BTN_NONE),
 ]
+
+# The three entries above share BTN_EXTENDED: the basic record only says "the
+# action lives in the extended slot"; the slot's event list says which kind.
+EXT_KINDS = {"Multimedia key": "media", "Keyboard key": "key",
+             "Key combination": "combo"}
+
+# Keyboard keys offered in the UI, in the HID table's order (a-z, 1-0, F1-F12,
+# then the named keys). The usages are the ones the CLI's key: prefix uses.
+KEY_CHOICES = [(name.upper() if len(name) == 1 or name[1:].isdigit()
+                else name.capitalize(), code)
+               for name, code in KEYS.items()]
+
+# Modifier sets for a combination: the HID modifier bits carried by the
+# 0x80/0x40 events (Ctrl+C was verified byte for byte with 0x01).
+MOD_CHOICES = [("Ctrl", 0x01), ("Shift", 0x02), ("Alt", 0x04), ("Win", 0x08),
+               ("Ctrl+Shift", 0x03), ("Ctrl+Alt", 0x05), ("Alt+Shift", 0x06)]
 
 MEDIA_KEYS = [
     ("Play / pause", protocol.MEDIA_PLAY_PAUSE),
@@ -910,73 +1096,151 @@ PHYSICAL_BUTTONS = {
 }
 
 
+def _pick_data(combo, base, value, raw_text):
+    """Select the entry whose data is `value`, or show `raw_text` unselectable."""
+    for i in range(base):
+        if combo.itemData(i) == value:
+            _combo_pick(combo, base, i)
+            return
+    _combo_pick_raw(combo, base, raw_text)
+
+
 class ButtonRow(QWidget):
     """One slot of the button table: a label, an action combo and, when the
-    action lives in an extended slot, a multimedia combo next to it."""
+    action lives in an extended slot, the fields that say what it sends — a
+    multimedia key, a keyboard key, or a modifier plus a key."""
     action_edited = Signal(int)     # emits the slot index
-    media_edited = Signal(int)
+    ext_edited = Signal(int)        # the multimedia/key/modifier field changed
 
     def __init__(self, index):
         super().__init__()
         self.index = index
         lay = QHBoxLayout(self); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(10)
 
-        name = PHYSICAL_BUTTONS.get(index)
-        lb = QLabel(f"{index:2d}  {name}" if name else f"{index:2d}  unused")
-        lb.setObjectName("" if name else "muted")
-        lb.setMinimumWidth(112)
-        lay.addWidget(lb)
+        # The number printed on the mouse, never the table index behind it
+        # (buttons 6-8 live at 10, 11 and 9 — an implementation detail).
+        label = next((n for n, (_, i, _r) in MouseDiagram.BUTTONS.items()
+                      if i == index), None)
+        role = MouseDiagram.BUTTONS[label][2] if label else "unused"
+        self.name = QLabel(f"{tr('Button {n}', n=label)}  "
+                           f"<span style='color:#8b9098'>{tr(role)}</span>"
+                           if label else f"Slot {index}  (unused)")
+        self.name.setFixedWidth(132)
+        self.name.setMinimumWidth(132)
+        lay.addWidget(self.name)
 
-        self.action = QComboBox()
-        for label, _ in BUTTON_ACTIONS:
-            self.action.addItem(label)
+        self.action = Combo(); self.action.setObjectName("buttonAction")
+        for text, _ in BUTTON_ACTIONS:
+            self.action.addItem(tr(text))
         self.action.currentIndexChanged.connect(
             lambda _idx: self.action_edited.emit(self.index))
         lay.addWidget(self.action, 1)
 
-        self.media = QComboBox(); self.media.setObjectName("media")
-        for label, _ in MEDIA_KEYS:
-            self.media.addItem(label)
-        self.media.currentIndexChanged.connect(
-            lambda _idx: self.media_edited.emit(self.index))
-        self.media.hide()
-        lay.addWidget(self.media, 1)
+        def field(choices, name):
+            combo = Combo(); combo.setObjectName(name)
+            for text, value in choices:
+                combo.addItem(tr(text), value)
+            combo.currentIndexChanged.connect(
+                lambda _idx: self.ext_edited.emit(self.index))
+            combo.hide()
+            return combo
+
+        self.media = field(MEDIA_KEYS, "media")
+        self.mods = field(MOD_CHOICES, "mods")
+        self.key = field(KEY_CHOICES, "key")
+        lay.addWidget(self.media, 1); lay.addWidget(self.mods); lay.addWidget(self.key)
 
         self.setEnabled(False)
 
     # -- state --------------------------------------------------------------
-    def set_action(self, action):
+    def set_action(self, action, ext=None):
+        """Show `action`; for BTN_EXTENDED, `ext` is what read_ext_slot found."""
         action = tuple(action)
+        if action == protocol.BTN_FACTORY_RESET:
+            # recognised, shown by name, and like any raw entry never sent back
+            _combo_pick_raw(self.action, len(BUTTON_ACTIONS),
+                            tr("Factory reset (not assignable here)"))
+            self.show_ext(None)
+            return
+        if action == protocol.BTN_EXTENDED:
+            kind = ext[0] if ext else "media"     # erased/unknown: say so there
+            label = next(t for t, k in EXT_KINDS.items() if k == kind)
+            _combo_pick(self.action, len(BUTTON_ACTIONS),
+                        [t for t, _ in BUTTON_ACTIONS].index(label))
+            self._set_ext(ext)
+            self.show_ext(kind)
+            return
         for i, (_, known) in enumerate(BUTTON_ACTIONS):
             if known == action:
                 _combo_pick(self.action, len(BUTTON_ACTIONS), i)
+                self.show_ext(None)
                 return
         _combo_pick_raw(self.action, len(BUTTON_ACTIONS),
-                        "unknown ({:02x} {:02x} {:02x})".format(*action))
+                        tr("unknown ({raw})",
+                           raw="{:02x} {:02x} {:02x}".format(*action)))
+        self.show_ext(None)
+
+    def _set_ext(self, ext):
+        if not ext:
+            _combo_pick_raw(self.media, len(MEDIA_KEYS), tr("unknown slot"))
+            return
+        kind, *values = ext
+        unknown = lambda v: tr("unknown (usage {usage})", usage=f"{v:04x}")
+        if kind == "media":
+            _pick_data(self.media, len(MEDIA_KEYS), values[0], unknown(values[0]))
+        elif kind == "key":
+            _pick_data(self.key, len(KEY_CHOICES), values[0], unknown(values[0]))
+        else:
+            _pick_data(self.mods, len(MOD_CHOICES), values[0], unknown(values[0]))
+            _pick_data(self.key, len(KEY_CHOICES), values[1], unknown(values[1]))
 
     def current_action(self):
         """The action tuple to send, or None when the entry is a raw byte dump."""
         i = self.action.currentIndex()
         return BUTTON_ACTIONS[i][1] if i < len(BUTTON_ACTIONS) else None
 
-    def set_media(self, usage):
-        for i, (_, known) in enumerate(MEDIA_KEYS):
-            if known == usage:
-                _combo_pick(self.media, len(MEDIA_KEYS), i)
-                return
-        text = ("unknown slot" if usage is None
-                else f"unknown (usage {usage:04x})")
-        _combo_pick_raw(self.media, len(MEDIA_KEYS), text)
+    def current_kind(self):
+        """"media", "key" or "combo" for an extended action, else None."""
+        i = self.action.currentIndex()
+        return EXT_KINDS.get(BUTTON_ACTIONS[i][0]) if i < len(BUTTON_ACTIONS) else None
 
-    def current_media(self):
-        i = self.media.currentIndex()
-        return MEDIA_KEYS[i][1] if i < len(MEDIA_KEYS) else None
+    def ensure_ext_choice(self):
+        """An explicit pick of an extended kind needs a value to send: replace a
+        raw "unknown" entry by the first real choice."""
+        kind = self.current_kind()
+        fields = {"media": [(self.media, MEDIA_KEYS)],
+                  "key": [(self.key, KEY_CHOICES)],
+                  "combo": [(self.mods, MOD_CHOICES), (self.key, KEY_CHOICES)]}
+        for combo, choices in fields.get(kind, []):
+            if combo.currentIndex() >= len(choices):
+                _combo_pick(combo, len(choices), 0)
 
-    def pick_first_media(self):
-        _combo_pick(self.media, len(MEDIA_KEYS), 0)
+    def current_ext(self):
+        """What to write into the slot, or None when any field is a raw entry."""
+        kind = self.current_kind()
+        if kind == "media":
+            usage = self.media.currentData()
+            return None if usage is None else ("media", usage)
+        if kind == "key":
+            usage = self.key.currentData()
+            return None if usage is None else ("key", usage)
+        if kind == "combo":
+            mods, usage = self.mods.currentData(), self.key.currentData()
+            return None if mods is None or usage is None else ("combo", mods, usage)
+        return None
 
-    def show_media(self, flag):
-        self.media.setVisible(flag)
+    def ext_text(self):
+        kind = self.current_kind()
+        if kind == "media":
+            return self.media.currentText()
+        if kind == "key":
+            return self.key.currentText()
+        return f"{self.mods.currentText()}+{self.key.currentText()}"
+
+    def show_ext(self, kind):
+        self.media.setVisible(kind == "media")
+        self.mods.setVisible(kind == "combo")
+        self.key.setVisible(kind in ("key", "combo"))
 
 
 class ButtonsPage(QWidget):
@@ -994,22 +1258,22 @@ class ButtonsPage(QWidget):
         self.setObjectName("page")
         self._loaded = False
         self._table = [protocol.BTN_NONE] * protocol.BUTTON_COUNT
-        self._media = {}                 # index -> usage read from the ext slot
+        self._ext = {}                   # index -> what read_ext_slot decoded
         root = QVBoxLayout(self); root.setContentsMargins(22, 22, 22, 22); root.setSpacing(12)
 
         head = QHBoxLayout()
-        t = QLabel("BUTTONS"); t.setObjectName("title")
+        t = QLabel(tr("BUTTONS")); t.setObjectName("title")
         head.addWidget(t); head.addStretch()
-        btn = QPushButton("Read from mouse"); btn.setObjectName("action")
+        btn = QPushButton(tr("Read from mouse")); btn.setObjectName("action")
         btn.clicked.connect(self._reload); head.addWidget(btn)
         root.addLayout(head)
 
-        note = QLabel(
+        note = QLabel(tr(
             "Click a number on the mouse to jump to its row. These are the eight "
             "buttons the mouse actually has, numbered the way the official app "
             "numbers them. The register table has sixteen slots, but the other "
             "eight fire nothing on this model — they are preserved untouched on "
-            "every write and simply not offered here.")
+            "every write and simply not offered here."))
         note.setObjectName("muted"); note.setWordWrap(True); root.addWidget(note)
 
         body = QWidget(); body.setObjectName("rowsBody")
@@ -1024,7 +1288,7 @@ class ButtonsPage(QWidget):
             index = MouseDiagram.BUTTONS[label][1]
             row = ButtonRow(index)
             row.action_edited.connect(self._on_action)
-            row.media_edited.connect(self._on_media)
+            row.ext_edited.connect(self._send_ext)
             rows.addWidget(row); self.rows[index] = row
         rows.addStretch()
 
@@ -1044,10 +1308,16 @@ class ButtonsPage(QWidget):
         root.addLayout(split, 1)
         self._area = area
 
-        hint = QLabel(
+        hint = QLabel(tr(
             "An action this app cannot build is shown as its raw bytes and cannot "
-            "be selected — the byte is preserved instead of being guessed at.")
+            "be selected — the byte is preserved instead of being guessed at."))
         hint.setObjectName("muted"); hint.setWordWrap(True); root.addWidget(hint)
+
+    @staticmethod
+    def _number(index):
+        """The number printed on the mouse for table `index`."""
+        return next((n for n, (_, i, _r) in MouseDiagram.BUTTONS.items()
+                     if i == index), index)
 
     def _focus_index(self, index):
         """Scroll to the row a diagram badge points at and highlight both."""
@@ -1067,51 +1337,36 @@ class ButtonsPage(QWidget):
         try:
             table = device.read_buttons()
         except device.DeviceNotFound as exc:
-            self._enable(False); self.status.emit(f"Error: {exc}", True)
+            self._enable(False); self.status.emit(tr("Error: {error}", error=tr_error(exc)), True)
             return
         if table is None:
             self._enable(False)
-            self.status.emit("Could not read the buttons — did the mouse answer?", True)
+            self.status.emit(tr("Could not read the buttons — did the mouse answer?"), True)
             return
         self._table = [tuple(a) for a in table]
-        self._media = {}
+        self._ext = {}
         for i, action in enumerate(self._table):
             if i not in self.rows:          # a slot no button fires; kept, not shown
                 continue
             if action == protocol.BTN_EXTENDED:
-                self._media[i] = self._read_media(i)
+                self._ext[i] = self._read_ext(i)
             self._show(i)
         self._enable(True)
         self._loaded = True
-        self.status.emit("Buttons read from the mouse.", False)
+        self.status.emit(tr("Buttons read from the mouse."), False)
 
     @staticmethod
-    def _read_media(index):
-        """The multimedia usage stored in the extended slot, or None.
-
-        None also means "a slot we do not decode" (a keyboard combo or a macro),
-        which the row then shows as unknown.
-        """
+    def _read_ext(index):
+        """What the extended slot holds, decoded — or None (erased, a macro, or
+        a layout we do not build), which the row then shows as unknown."""
         try:
-            reply = device.read_register(protocol.ext_slot_addr(index), 8)
+            return device.read_ext_slot(index)
         except (device.DeviceNotFound, OSError):
             return None
-        if not reply or len(reply) < 14:
-            return None
-        data = reply[6:14]
-        if data[0] != 0x02 or data[1] != protocol.EVENT_MEDIA_DOWN:
-            return None
-        return data[2] | (data[3] << 8)
 
     def _show(self, index):
         """Make row `index` reflect the state we believe the hardware holds."""
-        row = self.rows[index]
-        action = self._table[index]
-        row.set_action(action)
-        extended = action == protocol.BTN_EXTENDED
-        if extended:
-            row.set_media(self._media.get(index))
-        row.show_media(extended)
+        self.rows[index].set_action(self._table[index], self._ext.get(index))
 
     def _enable(self, flag):
         for row in self.rows.values():
@@ -1124,42 +1379,48 @@ class ButtonsPage(QWidget):
         if action is None:                       # a raw byte entry — never sent
             return
         if action == protocol.BTN_EXTENDED:
-            if row.current_media() is None:
-                row.pick_first_media()           # an explicit choice needs a key
-            self._send_media(index)
+            row.show_ext(row.current_kind())
+            row.ensure_ext_choice()              # an explicit choice needs a value
+            self._send_ext(index)
             return
         label = row.action.currentText()
         try:
             routes, table = device.send_button(index, action)
         except (device.DeviceNotFound, ValueError) as exc:
             self._show(index)                    # undo the visual change
-            self.status.emit(f"Error: {exc}", True)
+            self.status.emit(tr("Error: {error}", error=tr_error(exc)), True)
             return
         self._table = [tuple(a) for a in table]
-        self._media.pop(index, None)
-        row.show_media(False)
-        self.status.emit(f"Button {index} = {label} — via {', '.join(routes)}", False)
+        self._ext.pop(index, None)
+        row.show_ext(None)
+        self.status.emit(tr("{what} — via {routes}",
+                            what=tr("Button {n} = {action}", n=self._number(index),
+                                    action=label),
+                            routes=", ".join(routes)), False)
 
-    def _on_media(self, index):
-        self._send_media(index)
-
-    def _send_media(self, index):
+    def _send_ext(self, index):
+        """Write the extended slot (and the table) for button `index`."""
         row = self.rows[index]
-        usage = row.current_media()
-        if usage is None:                        # a raw slot dump — never sent
+        ext = row.current_ext()
+        if ext is None:                          # a raw entry — never sent
             return
-        label = row.media.currentText()
+        kind = ext[0]
+        senders = {"media": device.send_media, "key": device.send_key,
+                   "combo": device.send_combo}
         try:
-            routes, table = device.send_media(index, usage)
+            routes, table = senders[kind](index, *ext[1:])
         except (device.DeviceNotFound, ValueError) as exc:
             self._show(index)                    # undo the visual change
-            self.status.emit(f"Error: {exc}", True)
+            self.status.emit(tr("Error: {error}", error=tr_error(exc)), True)
             return
         self._table = [tuple(a) for a in table]
-        self._media[index] = usage
-        row.show_media(True)
-        self.status.emit(f"Button {index} = media '{label}'"
-                         f" — via {', '.join(routes)}", False)
+        self._ext[index] = ext
+        n = self._number(index)
+        what = {"media": tr("Button {n} = media '{key}'", n=n, key=row.ext_text()),
+                "key": tr("Button {n} = key '{key}'", n=n, key=row.ext_text()),
+                "combo": tr("Button {n} = {combo}", n=n, combo=row.ext_text())}[kind]
+        self.status.emit(tr("{what} — via {routes}", what=what,
+                            routes=", ".join(routes)), False)
 
 
 class MainWindow(QMainWindow):
@@ -1167,16 +1428,25 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("open-m711pro — Redragon M711 Pro")
         self.resize(940, 660)      # 620 keeps most of the 16 button rows on screen
+        self._build(0)
 
+    def _build(self, page):
+        """(Re)build every page in the current language, showing `page`.
+
+        Building only READS the mouse (each page reflects the hardware); a
+        rebuild for a language switch can therefore never write anything.
+        """
         central = QWidget(); self.setCentralWidget(central)
         outer = QVBoxLayout(central); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
 
         top = QHBoxLayout(); top.setContentsMargins(0, 0, 0, 0); top.setSpacing(0)
 
         sidebar = QWidget(); sidebar.setObjectName("sidebar"); sidebar.setFixedWidth(180)
-        sl = QVBoxLayout(sidebar); sl.setContentsMargins(0, 18, 0, 0); sl.setSpacing(0)
-        brand = QLabel("  M711 PRO"); brand.setObjectName("brand")
-        sub = QLabel("  open-m711pro"); sub.setObjectName("muted")
+        sl = QVBoxLayout(sidebar); sl.setContentsMargins(0, 18, 0, 14); sl.setSpacing(0)
+        brand = QLabel("M711 PRO"); brand.setObjectName("brand")
+        brand.setContentsMargins(18, 0, 0, 0)
+        sub = QLabel("open-m711pro"); sub.setObjectName("muted")
+        sub.setContentsMargins(18, 0, 0, 0)
         sl.addWidget(brand); sl.addWidget(sub); sl.addSpacing(18)
 
         self.stack = QStackedWidget()
@@ -1189,18 +1459,39 @@ class MainWindow(QMainWindow):
 
         self.nav_btns = []
         for i, name in enumerate(["Lighting", "Sensitivity (DPI)", "Buttons"]):
-            b = QPushButton(name); b.setObjectName("nav"); b.setCheckable(True)
+            b = QPushButton(tr(name)); b.setObjectName("nav"); b.setCheckable(True)
             b.clicked.connect(lambda _=False, idx=i: self._go(idx))
             sl.addWidget(b); self.nav_btns.append(b)
         sl.addStretch()
 
+        # Language switch, bottom-left: one chip per language.
+        lang = QHBoxLayout(); lang.setContentsMargins(18, 0, 18, 0); lang.setSpacing(6)
+        self.lang_btns = {}
+        for code, label in LANGUAGES.items():
+            chip = QPushButton(label); chip.setObjectName("lang")
+            chip.setCheckable(True); chip.setChecked(code == language())
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.setToolTip(tr("Language"))
+            chip.clicked.connect(lambda _=False, c=code: self._set_language(c))
+            lang.addWidget(chip); self.lang_btns[code] = chip
+        lang.addStretch()
+        sl.addLayout(lang)
+
         top.addWidget(sidebar); top.addWidget(self.stack, 1)
         outer.addLayout(top, 1)
 
-        self.status = QLabel("Ready."); self.status.setObjectName("statusbar")
+        self.status = QLabel(tr("Ready.")); self.status.setObjectName("statusbar")
         outer.addWidget(self.status)
 
-        self._go(0)
+        self._go(page)
+
+    def _set_language(self, code, persist=True):
+        if code == language():
+            self.lang_btns[code].setChecked(True)
+            return
+        set_language(code, persist=persist)
+        _install_qt_translator(QApplication.instance())
+        self._build(self.stack.currentIndex())
 
     def _go(self, idx):
         self.stack.setCurrentIndex(idx)
@@ -1218,8 +1509,31 @@ class MainWindow(QMainWindow):
         self.status.setText(msg)
 
 
+_qt_translator = None
+
+
+def _install_qt_translator(app):
+    """Qt's own dialogs (the colour picker) in the interface language.
+
+    Qt ships its translations; without loading them the picker stayed in
+    English inside a Portuguese interface. A missing file just leaves English.
+    """
+    global _qt_translator
+    if _qt_translator is not None:
+        app.removeTranslator(_qt_translator)
+        _qt_translator = None
+    if language() != "pt":
+        return
+    translator = QTranslator(app)
+    if translator.load("qtbase_pt_BR",
+                       QLibraryInfo.path(QLibraryInfo.TranslationsPath)):
+        app.installTranslator(translator)
+        _qt_translator = translator
+
+
 def main():
     app = QApplication.instance() or QApplication([])
     app.setStyleSheet(QSS)
+    _install_qt_translator(app)
     win = MainWindow(); win.show()
     app.exec()

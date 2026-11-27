@@ -1,8 +1,9 @@
 # udev rules for the Redragon M711 Pro (Compx 25a7) — open-m711pro
 #
-# Install to /etc/udev/rules.d/99-m711pro.rules, then:
+# Installed by `open-m711pro setup` (or packaging/install.sh from a checkout).
+# By hand: copy to /etc/udev/rules.d/70-m711pro.rules, then:
 #   sudo udevadm control --reload-rules && sudo udevadm trigger
-# (packaging/install.sh does both for you)
+# (both installers do this for you)
 #
 # The mouse is configured through HID Feature Reports on its /dev/hidraw* node,
 # which is root-only by default. These rules hand access to the logged-in user.
@@ -28,6 +29,14 @@
 #   system without logind, comment the two uaccess rules out and uncomment the
 #   GROUP fallback at the bottom — it is still better than 0666 because access
 #   is limited to members of one group.
+#
+# WHY 70 AND NOT 99
+#
+#   systemd grants the uaccess ACL in 73-seat-late.rules, and only to devices
+#   already tagged by then. A rule numbered 73 or higher adds the tag too late:
+#   `udevadm info` shows TAGS=:uaccess: yet the node stays root-only. Earlier
+#   versions shipped this file as 99-m711pro.rules and had exactly that bug;
+#   the installers remove the old file.
 #
 # The device appears under two product IDs: fa07 is the 2.4G receiver (dongle),
 # fa08 is the mouse itself over its own radio or over the cable. Both need the

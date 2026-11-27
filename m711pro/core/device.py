@@ -20,6 +20,7 @@ from .protocol import (build_color, build_breathing, build_cycle, build_off,
                        BUTTON_ADDR, BUTTON_COUNT, BTN_EXTENDED,
                        build_polling, polling_from_byte, POLLING_ADDR)
 from . import state
+from . import protocol
 
 EFFECT_NAMES = {0x00: "Cycle", 0x01: "Breathing", 0x02: "Steady", 0x04: "Off"}
 
@@ -47,6 +48,24 @@ RETRY_DELAY = 0.02             # seconds between repeats
 
 class DeviceNotFound(Exception):
     """No reachable configuration interface accepted the command."""
+
+
+class NoPermission(DeviceNotFound):
+    """The mouse is there, but its /dev/hidraw node cannot be opened.
+
+    By far the most common first-run failure: the node is root-only until the
+    udev rule is installed. A subclass of DeviceNotFound so every interface,
+    which already shows that exception's message, shows this one too.
+    """
+
+
+def _no_permission(paths):
+    nodes = ", ".join(paths)
+    return NoPermission(
+        f"the mouse was found ({nodes}) but this user cannot open it — the udev "
+        "rule is missing or has not applied. Run 'open-m711pro setup' (from a checkout: "
+        "'python3 main.py setup' or 'sudo sh packaging/install.sh'), then "
+        "replug the dongle.")
 
 
 def _IOC(direction, typ, nr, size):
@@ -115,16 +134,21 @@ def send_packets(packets):
     devices = find_devices()
     if not devices:
         raise DeviceNotFound(
-            "mouse not found — check the dongle/cable, the udev rule (0666) "
-            "and whether a VM has grabbed the device")
+            "mouse not found — check that the dongle is plugged in, the mouse "
+            "is switched on, and no virtual machine has grabbed the device")
     accepted = []
+    denied = []
     for dev, pid in devices:
         try:
             _apply(dev, packets)
             accepted.append(_mode_label(pid))
+        except PermissionError:
+            denied.append(dev)
         except OSError:
             pass
     if not accepted:
+        if denied:
+            raise _no_permission(denied)
         raise DeviceNotFound("no interface accepted the command")
     return accepted
 
@@ -217,15 +241,21 @@ def read_register(addr, length=8, timeout=0.6):
     if _last_reader in paths:                  # try the known-good node first
         paths.remove(_last_reader)
         paths.insert(0, _last_reader)
+    denied = []
     for dev in paths:
         try:
             reply = _read_from(dev, addr, length, timeout)
+        except PermissionError:
+            denied.append(dev)
+            continue
         except OSError:
             continue
         if reply:
             _last_reader = dev
             return reply
     _last_reader = None                        # nobody answered; probe again next time
+    if denied and len(denied) == len(paths):   # not silence: we were locked out
+        raise _no_permission(denied)
     return None
 
 
@@ -373,6 +403,24 @@ def read_buttons():
         out.append(tuple(data[0:3]))
         out.append(tuple(data[4:7]))
     return out
+
+
+def read_ext_slot(index):
+    """What button `index`'s extended slot holds, decoded.
+
+    ("media", usage), ("key", usage), ("combo", modifiers, usage), or None for
+    an erased, unreadable or unrecognised slot. Reads 20 bytes in two LEN-10
+    requests (the shape the official app reads with): a combination is a
+    14-byte record, more than one 8-byte read returns.
+    """
+    base = protocol.ext_slot_addr(index)
+    data = []
+    for addr in (base, base + 10):
+        reply = read_register(addr, 10)
+        if not reply or len(reply) < 16:
+            return None
+        data += list(reply[6:16])
+    return protocol.ext_action(protocol.parse_events(data))
 
 
 def send_buttons(actions):

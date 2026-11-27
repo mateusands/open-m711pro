@@ -14,12 +14,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
         runner: [ubuntu-latest]
         include:
-          # 3.8 is the floor declared in pyproject.toml, but it has no build
-          # for the current ubuntu-latest image.
+          # 3.8 is the floor declared in pyproject.toml, and neither it nor 3.9
+          # has a build for the current ubuntu-latest image (26.04).
           - python-version: "3.8"
+            runner: ubuntu-22.04
+          - python-version: "3.9"
             runner: ubuntu-22.04
 
     steps:
@@ -34,6 +36,11 @@ jobs:
       # dependency-free promise is broken.
       - name: Run the suite with zero dependencies installed
         run: python tools/run_tests.py
+
+      # Lets the install.sh test validate the menu entry for real, the way a
+      # desktop does (a bad .desktop once failed only on a user's machine).
+      - name: Install desktop-file-validate
+        run: sudo apt-get install -y --no-install-recommends desktop-file-utils
 
       - name: Install pytest
         run: pip install -r requirements-dev.txt
@@ -69,3 +76,15 @@ jobs:
               print(name, '->', eps[name].value)
           "
           test -x "$(command -v open-m711pro)"
+
+      # v0.1.0-v0.1.2 shipped without the udev rule, so release users were told
+      # to run a script they did not have. Prove the installed package has it.
+      - name: Check the udev rule and menu entry ship inside the package
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -c "
+          from m711pro import system
+          assert 'uaccess' in system.udev_rule()
+          assert 'Exec=' in system.desktop_entry(['open-m711pro-gui'])
+          print('package data OK')
+          "

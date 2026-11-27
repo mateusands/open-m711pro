@@ -214,8 +214,18 @@ def test_dpi_with_one_value_unifies_every_stage():
 
     assert message is None
     assert send_dpi_all.calls == [(1600,)]
-    assert "1583" in out and "all five stages" in out
-    assert "you asked for 1600" in out          # the quantisation is disclosed
+    # shown as the official app shows it, with the real value still disclosed
+    assert "1600 DPI (≈1583 real)" in out and "all five stages" in out
+    assert "you asked for" not in out           # 1600 is what they get on screen
+
+
+def test_dpi_off_the_hundreds_says_what_it_became():
+    send_dpi_all = Recorder(result=(["cable"], 1667))
+    with stubbed(send_dpi_all=send_dpi_all, send_dpi=_tripwire,
+                 read_dpi_table=_tripwire):
+        out, _ = run(["dpi", "1650"])
+
+    assert "1700 DPI" in out and "you asked for 1650" in out
 
 
 def test_dpi_with_stage_and_value_changes_one_stage():
@@ -374,3 +384,65 @@ def test_stubbing_restores_the_originals():
         assert device.send_color is not originals[2]
     assert (device.send_packets, device.find_devices, device.send_color,
             state.save) == originals
+
+
+# --- setup: the udev rule and menu entry, for pip and release installs ------
+def test_setup_dispatches_to_the_system_module():
+    from m711pro import system
+    calls = []
+    original = system.setup
+    system.setup = lambda **kw: calls.append("setup")
+    try:
+        with stubbed():                      # setup must not touch the mouse
+            commands.main(["setup"])
+    finally:
+        system.setup = original
+    assert calls == ["setup"]
+
+
+def test_setup_uninstall_dispatches_to_uninstall():
+    from m711pro import system
+    calls = []
+    original = system.uninstall
+    system.uninstall = lambda **kw: calls.append("uninstall")
+    try:
+        with stubbed():
+            commands.main(["setup", "--uninstall"])
+    finally:
+        system.uninstall = original
+    assert calls == ["uninstall"]
+
+
+def test_setup_is_in_the_usage_text():
+    assert " setup" in commands.USAGE
+
+
+def test_dpi_above_the_ceiling_is_not_relabelled_16000():
+    # an erased byte (0xFF) decodes to 21333; it must not pass for "16000"
+    raw = protocol.byte_to_dpi(0xFF)
+    with stubbed(read_dpi_table=Recorder(result=[raw] + [1000] * 4)):
+        out, _ = run(["dpi"])
+    assert f"stage 1: {raw} DPI (outside the known range)" in out
+    assert "stage 2: 1000 DPI" in out
+
+
+def test_buttons_names_the_factory_reset_and_does_not_offer_it():
+    table = [protocol.BTN_NONE] * 16
+    table[6] = protocol.BTN_FACTORY_RESET
+    with stubbed(read_buttons=Recorder(result=table)):
+        out, _ = run(["buttons"])
+    assert "factory reset" in out
+    assert "factory-reset" not in commands.ACTIONS and "reset" not in commands.ACTIONS
+
+
+def test_buttons_shows_the_number_printed_on_the_mouse():
+    """`button <n>` takes the TABLE index; the listing must say which physical
+    button each index is, or `button 1 middle` silently remaps the RIGHT
+    button (index 1 is button 2 on the mouse)."""
+    table = [protocol.BTN_NONE] * 16
+    with stubbed(read_buttons=Recorder(result=table)):
+        out, _ = run(["buttons"])
+    lines = {int(l.split(":")[0]): l for l in out.splitlines() if ":" in l}
+    assert "mouse button 2" in lines[1]
+    assert "mouse button 8" in lines[9] and "mouse button 6" in lines[10]
+    assert "mouse button" not in lines[5]                 # no physical button

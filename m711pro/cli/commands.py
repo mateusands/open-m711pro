@@ -14,10 +14,13 @@ Usage:
     python3 main.py polling        # show the USB polling rate
     python3 main.py polling 500    # set it to 500 Hz
 
-    python3 main.py buttons        # list the 16 buttons
-    python3 main.py button 1 middle
-    python3 main.py button 9 media:mute
+    python3 main.py buttons        # list the 16 slots and their mouse buttons
+    python3 main.py button 2 middle      # TABLE index 2 = mouse button 3
+    python3 main.py button 9 media:mute  # index 9 = mouse button 8
     python3 main.py button 9 key:a
+
+    python3 main.py setup          # install the udev rule and the menu entry
+    python3 main.py setup --uninstall
 """
 import os
 import sys
@@ -75,6 +78,19 @@ DPI_USAGE = ("Usage: " + PROG + " dpi                  # show the stages\n"
              "       " + PROG + " dpi <stage> <value> # change one stage")
 
 
+def _describe(dpi):
+    """A DPI decoded from the mouse, shown the way the official app shows it.
+
+    byte -> DPI -> byte is the identity only up to the ceiling 0xBD; a byte
+    above it (never written by the app — e.g. an erased 0xFF) would otherwise
+    be relabelled "16000". Those keep their raw decoded value.
+    """
+    b = protocol.dpi_to_byte(dpi)
+    if protocol.byte_to_dpi(b) != dpi:
+        return f"{dpi} DPI (outside the known range)"
+    return protocol.dpi_text(b)
+
+
 def _cmd_dpi(argv):
     """`dpi` shows; `dpi <value>` unifies; `dpi <stage> <value>` changes one."""
     if not argv:
@@ -83,7 +99,7 @@ def _cmd_dpi(argv):
             raise SystemExit("Error: could not read the DPI from the mouse — "
                              "is the dongle plugged in and the device free?")
         for i, dpi in enumerate(table, 1):
-            print(f"  stage {i}: {dpi} DPI")
+            print(f"  stage {i}: {_describe(dpi)}")
         if len(set(table)) == 1:
             print("  (all five equal: the mouse's DPI button changes nothing)")
         return
@@ -97,18 +113,20 @@ def _cmd_dpi(argv):
     if len(numbers) == 1:                      # a single DPI across all stages
         requested = numbers[0]
         routes, actual = device.send_dpi_all(requested)
-        print(f"DPI = {actual} on all five stages (via {', '.join(routes)})")
-        if actual != requested:
+        byte = protocol.dpi_to_byte(actual)
+        print(f"DPI = {protocol.dpi_text(byte)} on all five stages "
+              f"(via {', '.join(routes)})")
+        if protocol.dpi_display(byte) != requested:
             print(f"  (you asked for {requested}; the hardware step is ~83 DPI)")
         return
 
     stage, requested = numbers
     routes, table = device.send_dpi(stage, requested)
-    actual = table[stage - 1]
-    print(f"Stage {stage} = {actual} DPI (via {', '.join(routes)})")
-    if actual != requested:
+    byte = protocol.dpi_to_byte(table[stage - 1])
+    print(f"Stage {stage} = {protocol.dpi_text(byte)} (via {', '.join(routes)})")
+    if protocol.dpi_display(byte) != requested:
         print(f"  (you asked for {requested}; the hardware step is ~83 DPI)")
-    print("  table: " + " . ".join(str(d) for d in table))
+    print("  table: " + " . ".join(_describe(d) for d in table))
 
 
 def _cmd_dpi_effect(argv):
@@ -177,9 +195,11 @@ ACTION_NAMES = {
     (0x01, 0x10, 0x00): 'forward', (0x02, 0x02, 0x00): 'dpi+',
     (0x02, 0x03, 0x00): 'dpi-', (0x02, 0x01, 0x00): 'dpi-cycle',
     (0x08, 0x00, 0x00): 'rgb', (0x07, 0x00, 0x00): 'polling',
+    protocol.BTN_FACTORY_RESET: 'factory reset (not assignable)',
 }
 BUTTON_USAGE = ("Usage: " + PROG + " buttons               # list the 16 buttons\n"
-                "       " + PROG + " button <0-15> <action>\n"
+                "       " + PROG + " button <0-15> <action>  # TABLE index, "
+                "see `buttons`\n"
                 f"actions: {' '.join(sorted(ACTIONS))}\n"
                 f"media:   {' '.join('media:' + m for m in sorted(MEDIA))}\n"
                 "keys:    key:<name>       a-z 0-9 f1-f12 enter esc "
@@ -199,8 +219,10 @@ def _cmd_buttons(argv):
             name = f"fire (speed {action[1]}, {action[2]} clicks)"
         extra = (f"  slot 0x{protocol.ext_slot_addr(i):04X}"
                  if action == protocol.BTN_EXTENDED else "")
+        number = protocol.BUTTON_NUMBERS.get(i)
+        where = f"  (mouse button {number})" if number else ""
         print(f"  {i:2d}: {action[0]:02x} {action[1]:02x} {action[2]:02x}  "
-              f"{name or '?'}{extra}")
+              f"{name or '?'}{extra}{where}")
 
 
 def _cmd_button(argv):
@@ -248,7 +270,32 @@ def _cmd_button(argv):
     print(f"Button {index} = {name} (via {', '.join(routes)})")
 
 
+def _cmd_setup(args):
+    """Install (or remove) the udev rule and the menu entry.
+
+    Lives in the CLI so pip and release installs, which do not carry
+    packaging/install.sh, can still grant themselves access to the mouse.
+    """
+    import subprocess
+    from .. import system
+    try:
+        if not args:
+            return system.setup()
+        if args == ['--uninstall']:
+            return system.uninstall()
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(f"Error: '{' '.join(exc.cmd)}' failed "
+                         f"(exit {exc.returncode})")
+    except FileNotFoundError as exc:
+        raise SystemExit(f"Error: {exc.filename} not found — install the "
+                         "udev rule by hand, see the README")
+    except system.RunAsUser as exc:
+        raise SystemExit(f"Error: {exc}")
+    raise SystemExit(f"Usage: {PROG} setup [--uninstall]")
+
+
 COMMANDS = {
+    'setup': _cmd_setup,
     'dpi': _cmd_dpi,
     'dpi-effect': _cmd_dpi_effect, 'dpieffect': _cmd_dpi_effect,
     'buttons': _cmd_buttons,

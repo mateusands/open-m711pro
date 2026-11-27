@@ -172,6 +172,47 @@ def byte_to_dpi(n):
     return round((n + 1) * 250 / 3)
 
 
+DPI_LABEL_STEP = 100      # the official app labels DPI in hundreds
+DPI_LABEL_MAX = 16000     # what the app calls the firmware ceiling (Cfg.ini)
+
+
+def dpi_label(n):
+    """The DPI the official app would show for register byte `n`, or None.
+
+    The register step (~83.33) is smaller than 100, so each multiple of 100
+    lands on its own byte and the app's label can be recovered from the byte
+    alone: it is the multiple of 100 that encodes to `n`. Reproduces all six
+    labels read off the app (700 for 0x07 although the step decodes to 667)
+    and the "16000" the app's Cfg.ini gives the ceiling byte 0xBD.
+
+    Display only — nothing here changes a byte on the wire.
+    """
+    if n == DPI_BYTE_MAX:
+        return DPI_LABEL_MAX
+    real = (n + 1) * 250 / 3
+    lower = int(real // DPI_LABEL_STEP) * DPI_LABEL_STEP
+    for candidate in (lower, lower + DPI_LABEL_STEP):
+        if DPI_MIN <= candidate <= DPI_MAX and dpi_to_byte(candidate) == n:
+            return candidate
+    return None
+
+
+def dpi_display(n):
+    """The number to show for byte `n`: the app's label, else the real value.
+
+    Either way dpi_to_byte(dpi_display(n)) == n, so a value typed back from the
+    screen writes the same byte.
+    """
+    label = dpi_label(n)
+    return byte_to_dpi(n) if label is None else label
+
+
+def dpi_text(n):
+    """"700 DPI (≈667 real)" — the label, plus the real value when it differs."""
+    shown, real = dpi_display(n), byte_to_dpi(n)
+    return f"{shown} DPI" if shown == real else f"{shown} DPI (≈{real} real)"
+
+
 def axis_pair(entry):
     """The two axis values of a table entry: a single value (X = Y) or (x, y).
 
@@ -257,10 +298,21 @@ def build_dpi_colors(colors):
 # Redragon M913 — both were verified against this mouse before being used.
 BUTTON_ADDR = 0x0060
 BUTTON_COUNT = 16
+# Table index -> the number printed on the mouse (and used by the official app).
+# Each pair was proven by a single-variable experiment; the other eight indices
+# fire nothing on this model. The order is NOT the index order.
+BUTTON_NUMBERS = {0: 1, 1: 2, 2: 3, 3: 4, 4: 5, 10: 6, 11: 7, 9: 8}
 BUTTONS_PER_PACKET = 2
 
 BTN_NONE = (0x00, 0x00, 0x00)      # no action / disabled
 BTN_EXTENDED = (0x05, 0x00, 0x00)  # the action lives in the extended slot
+# Restore factory settings. The mouse ships it at table index 6, which no
+# physical button fires. Found 2026-11-27 by copying it to button 8 and
+# pressing once: DPI (-> 1000/2000/4000/8000/16000), LED (-> Streaming, red),
+# buttons and the DPI Effect group were rewritten to the factory defaults and
+# the extended slots erased. Named so it can be recognised when read back;
+# deliberately never offered as an action — one press wipes the configuration.
+BTN_FACTORY_RESET = (0x09, 0x00, 0x00)
 
 MOUSE_LEFT = 0x01
 MOUSE_RIGHT = 0x02
@@ -311,11 +363,13 @@ def btn_rgb_toggle():
 
 
 def btn_polling_switch():
-    """Cycle the USB polling rate.
+    """Cycle the USB polling rate, one step per press, going UP and wrapping:
+    125 -> 250 -> 500 -> 1000 -> 125 Hz.
 
-    0x07 by elimination: the single-variable test above pinned 0x08 to the LED
-    toggle, and these two are the pair the official app offers. Not yet
-    confirmed by its own isolated experiment.
+    Confirmed on this hardware (2026-11-27): with only button 8 (index 9) set
+    to 0x07, counted presses moved register 0x0000 from 500 to 1000 (01), then
+    to 125 (08), then to 250 (04). The firmware writes the new rate to the
+    register itself, so read_polling reflects it.
     """
     return (0x07, 0x00, 0x00)
 
@@ -407,6 +461,50 @@ def build_events(index, events):
     base = ext_slot_addr(index)
     return [build_write(base + off, data[off:off + MAX_DATA])
             for off in range(0, len(data), MAX_DATA)]
+
+
+def parse_events(data):
+    """Decode an extended-slot record back into [(type, code), ...].
+
+    The inverse of build_events. Returns None for anything that is not a
+    well-formed record — an erased slot (all 0xFF, as a factory reset leaves
+    it), a bad checksum, or too few bytes — so a caller never shows a guess.
+    """
+    data = bytes(data)
+    if not data:
+        return None
+    count = data[0]
+    size = 1 + 3 * count + 1
+    if count == 0 or count == 0xFF or len(data) < size:
+        return None
+    if checksum(data[:size - 1]) != data[size - 1]:
+        return None
+    return [(data[1 + 3 * i], data[2 + 3 * i] | (data[3 + 3 * i] << 8))
+            for i in range(count)]
+
+
+def ext_action(events):
+    """Classify an event list as one of the shapes this project builds.
+
+    ("media", usage), ("key", usage) or ("combo", modifiers, usage) — exactly
+    the records build_media / build_key / build_combo write. Anything else (a
+    macro, an unknown layout) is None: shown as unknown, never rewritten.
+    """
+    if not events:
+        return None
+    if len(events) == 2:
+        (t1, c1), (t2, c2) = events
+        if (t1, t2) == (EVENT_MEDIA_DOWN, EVENT_MEDIA_UP) and c1 == c2:
+            return ("media", c1)
+        if (t1, t2) == (EVENT_KEY_DOWN, EVENT_KEY_UP) and c1 == c2:
+            return ("key", c1)
+    if len(events) == 4:
+        (t1, m1), (t2, k1), (t3, m2), (t4, k2) = events
+        if ((t1, t2, t3, t4) == (EVENT_MOD_DOWN, EVENT_KEY_DOWN,
+                                 EVENT_MOD_UP, EVENT_KEY_UP)
+                and m1 == m2 and k1 == k2):
+            return ("combo", m1, k1)
+    return None
 
 
 def build_media(index, usage):

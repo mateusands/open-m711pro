@@ -1,10 +1,13 @@
 # open-m711pro
 
+**🇺🇸 English** · [🇧🇷 Português](README.pt-BR.md)
+
 [![tests](https://github.com/mateusands/open-m711pro/actions/workflows/tests.yml/badge.svg)](https://github.com/mateusands/open-m711pro/actions/workflows/tests.yml)
 
 **Configure your Redragon M711 Pro (Cobra Pro) mouse on Linux — no Windows
 needed.** RGB lighting, DPI, polling rate, button remapping and macro-style key
-combinations, from a GUI or the command line.
+combinations, from a GUI or the command line. The interface speaks English and
+Brazilian Portuguese.
 
 Redragon ships configuration software for Windows only. This project talks to
 the mouse directly: the USB protocol was reverse-engineered by capturing the
@@ -48,22 +51,26 @@ protocol were cross-checked against them.
 If [libratbag](https://github.com/libratbag/libratbag) / Piper does not list your
 Redragon, this is an alternative for this particular model.
 
+> **Note:** the plain **M711 Cobra** (no "Pro") is a different mouse with a
+> different chip (`04d9:fc30`) — this project does not support it.
+
 ## What works
 
 - **LED** — solid colour, brightness, breathing, cycle, off, effect speed
 - **DPI** — all five stages, independent X/Y in the wire format, single-DPI mode
 - **DPI Effect** — the LED that indicates the current DPI stage
-- **Buttons** — remap all 16 slots: mouse buttons, DPI up/down/cycle, fire key,
+- **USB polling rate** — 1000 / 500 / 250 / 125 Hz
+- **Buttons** — remap all eight: mouse buttons, DPI up/down/cycle, fire key,
   three-click, RGB toggle, polling switch, disable
 - **Multimedia keys** — play/pause, next, previous, mute, stop, volume
-- **Keyboard keys and combinations** — `key:a`, `combo:ctrl+c`
+- **Keyboard keys and combinations** (e.g. Ctrl+C), from the interface or the
+  CLI (`key:a`, `combo:ctrl+c`) — verified byte for byte against what the
+  official app writes
 - **Reading the real state** back from the mouse, not just what this app wrote
 
-- **USB polling rate** — 1000 / 500 / 250 / 125 Hz
-
-Not mapped yet: macros and modifier combos. Keyboard keys are implemented but
-**experimental** (see below), and a second LED zone at `0x0054` is decoded by
-analogy with the M913 but not confirmed here.
+Not mapped yet: **macros**, and the official app's **Neon** lighting effect. A
+second LED block at `0x0054` accepts writes but lights nothing on this model
+(see below).
 
 ## Requirements
 
@@ -86,14 +93,37 @@ is pure logic and already portable; only the I/O module is tied to Linux.
 If you want to take that on, the seam is deliberate and small: `find_devices`,
 `_send_feature` and `_read_from` are the only functions that touch the kernel.
 
-## Install
+On Windows or macOS, [HIDra](https://github.com/luizjr/HIDra) (GPL-3.0) builds on
+this project's protocol work and targets all three systems. We have not tested
+it ourselves.
 
-From a checkout of this repository:
+## Quick start
 
 ```bash
-pip install --user .          # core only, zero dependencies
-pip install --user '.[gui]'   # with the Qt interface (PySide6)
+git clone https://github.com/mateusands/open-m711pro && cd open-m711pro
+sudo sh packaging/install.sh   # lets your user reach the mouse; adds a menu entry
+python3 main.py                # opens the interface
 ```
+
+No build step: it is plain Python. The release downloads are the same code as a
+Python package — if you took the `.whl`, install it with
+`pipx install --system-site-packages open_m711pro-*.whl` and run
+`open-m711pro setup` instead of the second line.
+
+## Install
+
+Installing is optional — `python3 main.py` from a checkout needs nothing. To
+get the `open-m711pro` commands on your `PATH`, use
+[pipx](https://pipx.pypa.io) from a checkout of this repository:
+
+```bash
+pipx install --system-site-packages .   # uses your distribution's PySide6
+pipx install '.[gui]'                   # or pulls PySide6 from PyPI
+```
+
+Plain `pip install --user` is refused on Arch, Debian 12+, Ubuntu 23.04+ and
+other distributions that mark their Python as externally managed (PEP 668);
+pipx is the supported way around that.
 
 This gives you `open-m711pro` (CLI) and `open-m711pro-gui` (graphical
 interface); `python3 -m m711pro` works as well. Running from the source tree
@@ -102,12 +132,15 @@ with `python3 main.py` keeps working and needs no install at all.
 Then grant access to the device and add the menu entry:
 
 ```bash
-sudo sh packaging/install.sh
+open-m711pro setup             # pip install or release download
+sudo sh packaging/install.sh   # or, from a checkout
 ```
 
-That installs a udev rule for both product IDs (`25a7:fa07` and `25a7:fa08`),
-reloads udev, and drops a `.desktop` file in the application menu. Replug the
-mouse afterwards. It is idempotent, and `--uninstall` reverses it.
+Either installs a udev rule for both product IDs (`25a7:fa07` and `25a7:fa08`),
+reloads udev, and adds the app to the application menu. `setup` asks for `sudo`
+only to copy the rule into `/etc`. Replug the mouse afterwards. Both are
+idempotent, and `--uninstall` reverses them. Without the rule the app tells you
+so: "this user cannot open it — the udev rule is missing or has not applied".
 
 The rule uses `TAG+="uaccess"`, which hands the `hidraw` node to the user of the
 active local session, rather than the `MODE="0666"` one-liner that would leave
@@ -140,7 +173,7 @@ python3 main.py
 ```
 
 Debian splits PySide6 into per-module packages, so the name may differ between
-releases; `pip install --user PySide6` always works as a fallback. If you plan to
+releases. Without PySide6 the app still runs, with its tkinter interface. If you plan to
 use the tkinter interface instead, Debian and Ubuntu do **not** ship tkinter with
 Python by default — install `python3-tk`.
 
@@ -165,16 +198,16 @@ python3 main.py
 **Anything else**
 
 ```bash
-pip install --user 'PySide6>=6.5'
 git clone https://github.com/mateusands/open-m711pro && cd open-m711pro
+python3 -m venv .venv && .venv/bin/pip install 'PySide6>=6.5'
 sudo sh packaging/install.sh
-python3 main.py
+.venv/bin/python main.py
 ```
 
 Package names were taken from each distribution's current repositories and are
-the part of this most likely to drift; if one is wrong on your system, `pip
-install --user PySide6` is the universal path, and a pull request fixing the
-name is welcome.
+the part of this most likely to drift; if one is wrong on your system, the
+virtual environment above is the universal path (or skip PySide6 and use the
+tkinter interface), and a pull request fixing the name is welcome.
 
 ## Usage
 
@@ -184,6 +217,9 @@ Graphical interface:
 open-m711pro-gui       # installed
 python3 main.py        # from the source tree
 ```
+
+The interface follows the system language on first run and can be switched in
+the bottom-left corner (**EN / PT-BR**).
 
 Command line (`python3 main.py` works the same way from the source tree):
 
@@ -198,14 +234,49 @@ open-m711pro dpi 1600       # single DPI: apply it to all five stages
 open-m711pro dpi 3 4000     # stage 3 = 4000 DPI
 open-m711pro dpi-effect on  # DPI stage indicator LED
 
-open-m711pro buttons        # list the 16 button slots
-open-m711pro button 1 middle
-open-m711pro button 9 media:mute
+open-m711pro buttons        # the 16 table slots, and which mouse button each is
+open-m711pro button 2 middle        # index 2 = mouse button 3 (the wheel)
+open-m711pro button 9 media:mute    # index 9 = mouse button 8
+open-m711pro button 10 combo:ctrl+c # index 10 = mouse button 6
 ```
 
-> DPI is stored as a single byte with a step of ~83, so the value shown is what
-> the mouse actually holds: asking for 1600 gives 1583. The official app hides
-> this by displaying the number you typed. 1000, 2000, 4000 and 8000 are exact.
+> `button` takes the **table index**, not the number printed on the mouse —
+> `buttons` lists both. The graphical interface uses the mouse's numbers.
+
+> DPI is stored as a single byte with a step of ~83, so 700 is really stored as
+> ≈667 and 1600 as ≈1583. The bytes are exactly the ones the official app
+> writes, and values are shown the way the app shows them — `700 DPI (≈667 real)`
+> — so the number you typed stays on screen and the real one is still visible.
+> 1000, 2000, 4000 and 8000 are exact.
+
+## Adding it to the application menu
+
+Both installers above already add the menu entry. To add **only** the entry —
+no udev rule, no sudo — create it for your user, pointing at your checkout:
+
+```bash
+cat > ~/.local/share/applications/open-m711pro.desktop <<EOF
+[Desktop Entry]
+Type=Application
+Name=open-m711pro
+Comment=Configure the Redragon M711 Pro mouse
+Exec=python3 "$PWD/main.py"
+Icon=input-mouse
+Categories=Settings;HardwareSettings;
+EOF
+```
+
+Run it from inside the checkout (it records `$PWD`). Delete the file to remove
+the entry.
+
+## Troubleshooting
+
+| Message | Cause and fix |
+|---------|---------------|
+| "this user cannot open it — the udev rule is missing or has not applied" | Run `open-m711pro setup` (or `sudo sh packaging/install.sh`), then replug the dongle. |
+| "mouse not found" | The dongle is unplugged, the mouse is off, or a virtual machine holds the USB device. `lsusb` should list `25a7:fa07`. |
+| "could not read …" / no answer | The mouse fell asleep or is out of range. Move it to wake it and try again; nothing was written. |
+| The menu entry does nothing | Re-run the installer from the checkout you actually use: the entry points at that checkout's `main.py`. |
 
 ## The interface
 
@@ -229,14 +300,16 @@ m711pro/
 │   ├── device.py        hidraw I/O (find_devices, send_*, read_*)
 │   └── state.py         local persistence of the last applied state
 ├── cli/commands.py      command-line interface
+├── system.py            `open-m711pro setup`: udev rule and menu entry
 ├── ui/
 │   ├── qt.py            PySide6 interface
+│   ├── i18n.py          interface text in English and Portuguese
 │   ├── tk.py            tkinter fallback
 │   └── theme.py         palette and visual constants
-└── data/colors.py       colour names and palette
-tools/                   read-only memory dumper, test runner
+└── data/                colour names, HID keys, udev rule, .desktop entry
+tools/                   memory dumper, DPI measurement, test runner
 tests/                   byte-match tests against real captures
-packaging/               udev rule, .desktop entry, install script
+packaging/               install script for a checkout
 ```
 
 Layer rules: `core/protocol.py` is pure logic and is what the byte-match tests
@@ -297,10 +370,12 @@ the official app and reading which record moved:
 | 8 (behind the wheel, furthest) | 9 |
 
 Indices 5-8 and 12-15 are not reachable from the official interface. Index 6
-holds `09 00 00` from the factory — an action type that appears in no table,
-ours or m913-ctl's. Since no button maps to it, the app can never be used to
-find out what it means. `read_buttons` returns raw bytes and `send_button`
-preserves every record it was not asked to change, so it survives untouched.
+holds `09 00 00` from the factory, an action type that appears in no other
+table. Copied to button 8 and pressed once, it turned out to be **restore
+factory settings**: DPI, lighting, buttons and the DPI Effect went back to the
+defaults and the extended slots were erased. Since no physical button fires
+index 6, it is harmless where it ships; this project names it but never offers
+it as an action.
 
 ### The second LED block (`0x0054`)
 
@@ -334,8 +409,9 @@ official app labels "16000".
 | `0x02` | DPI: `01` cycle, `02` up, `03` down | variant | — |
 | `0x04` | repeated click (fire key / three-click) | speed | clicks |
 | `0x05` | action lives in the extended slot | — | — |
-| `0x07` | polling rate switch | — | — |
+| `0x07` | polling rate switch: 125 → 250 → 500 → 1000 → 125 per press | — | — |
 | `0x08` | RGB toggle | — | — |
+| `0x09` | restore factory settings (not offered) | — | — |
 
 ### Extended slot: an event list
 
@@ -370,6 +446,7 @@ standard HID values.
 python3 -m pytest              # byte-match tests
 python3 tools/run_tests.py     # same tests without pytest
 python3 tools/dump_config.py   # read-only dump of the config memory
+sudo python3 tools/measure_dpi.py   # measure the real DPI with a ruler (read-only)
 ```
 
 Every packet builder has a byte-match test against a real capture. That is the
