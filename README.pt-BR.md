@@ -408,7 +408,7 @@ de códigos do m913-ctl. O teto do firmware é
 | `0x02` | DPI: `01` alternar, `02` +, `03` − | variante | — |
 | `0x04` | clique repetido (disparo / três cliques) | velocidade | cliques |
 | `0x05` | a ação fica no slot estendido | — | — |
-| `0x07` | alternar taxa de polling | — | — |
+| `0x07` | alternar taxa de polling: 125 → 250 → 500 → 1000 → 125 a cada clique | — | — |
 | `0x08` | liga/desliga RGB | — | — |
 
 ### Slot estendido: uma lista de eventos

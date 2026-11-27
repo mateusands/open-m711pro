@@ -352,11 +352,13 @@ def btn_rgb_toggle():
 
 
 def btn_polling_switch():
-    """Cycle the USB polling rate.
+    """Cycle the USB polling rate, one step per press, going UP and wrapping:
+    125 -> 250 -> 500 -> 1000 -> 125 Hz.
 
-    0x07 by elimination: the single-variable test above pinned 0x08 to the LED
-    toggle, and these two are the pair the official app offers. Not yet
-    confirmed by its own isolated experiment.
+    Confirmed on this hardware (2026-11-27): with only button 8 (index 9) set
+    to 0x07, counted presses moved register 0x0000 from 500 to 1000 (01), then
+    to 125 (08), then to 250 (04). The firmware writes the new rate to the
+    register itself, so read_polling reflects it.
     """
     return (0x07, 0x00, 0x00)
 

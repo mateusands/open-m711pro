@@ -402,7 +402,7 @@ official app labels "16000".
 | `0x02` | DPI: `01` cycle, `02` up, `03` down | variant | — |
 | `0x04` | repeated click (fire key / three-click) | speed | clicks |
 | `0x05` | action lives in the extended slot | — | — |
-| `0x07` | polling rate switch | — | — |
+| `0x07` | polling rate switch: 125 → 250 → 500 → 1000 → 125 per press | — | — |
 | `0x08` | RGB toggle | — | — |
 
 ### Extended slot: an event list
