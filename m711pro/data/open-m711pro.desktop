@@ -7,6 +7,6 @@ Comment=Configure the LED, DPI and buttons of the Redragon M711 Pro mouse
 Exec=open-m711pro-gui
 Icon=input-mouse
 Terminal=false
-Categories=Utility;Settings;HardwareSettings;
+Categories=Settings;HardwareSettings;
 Keywords=mouse;redragon;m711;dpi;rgb;led;
 StartupNotify=true

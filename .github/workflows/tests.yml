@@ -35,6 +35,11 @@ jobs:
       - name: Run the suite with zero dependencies installed
         run: python tools/run_tests.py
 
+      # Lets the install.sh test validate the menu entry for real, the way a
+      # desktop does (a bad .desktop once failed only on a user's machine).
+      - name: Install desktop-file-validate
+        run: sudo apt-get install -y --no-install-recommends desktop-file-utils
+
       - name: Install pytest
         run: pip install -r requirements-dev.txt
 

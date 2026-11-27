@@ -185,3 +185,59 @@ def test_install_sh_handles_the_legacy_rule_too():
         script = handle.read()
     assert "99-redragon-m711.rules" in script
     assert system.LEGACY_LINE in script
+
+
+# --- install.sh, run for real in a sandbox ------------------------------------
+# The script once wrote the menu entry to a temp file without a .desktop
+# extension; desktop-file-validate rejected it on the owner's machine and no
+# test noticed, because nothing ever RAN the script. The target directories
+# can be redirected (as installers usually allow) and udevadm is faked.
+def _run_install(tmp, *args, legacy=None):
+    import subprocess
+    rules, apps, bin_dir = (os.path.join(tmp, d) for d in ("rules", "apps", "bin"))
+    for d in (rules, apps, bin_dir):
+        os.makedirs(d, exist_ok=True)
+    for tool in ("udevadm", "update-desktop-database"):   # system-wide effects
+        fake = os.path.join(bin_dir, tool)
+        with open(fake, "w") as handle:
+            handle.write("#!/bin/sh\nexit 0\n")
+        os.chmod(fake, 0o755)
+    if legacy is not None:
+        with open(os.path.join(rules, "99-redragon-m711.rules"), "w") as handle:
+            handle.write(legacy)
+    env = dict(os.environ, UDEV_RULE_DIR=rules, DESKTOP_DIR=apps,
+               M711_INSTALL_SKIP_ROOT="1",
+               PATH=bin_dir + os.pathsep + os.environ.get("PATH", ""))
+    result = subprocess.run(["sh", os.path.join(REPO, "packaging", "install.sh"),
+                             *args], env=env, capture_output=True, text=True)
+    return result, rules, apps
+
+
+def test_install_sh_installs_both_files_and_a_valid_entry():
+    with tempfile.TemporaryDirectory() as tmp:
+        result, rules, apps = _run_install(tmp, legacy=system.LEGACY_LINE + "\n")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert os.path.exists(os.path.join(rules, "99-m711pro.rules"))
+        assert not os.path.exists(os.path.join(rules, "99-redragon-m711.rules"))
+        with open(os.path.join(apps, "open-m711pro.desktop")) as handle:
+            entry = handle.read()
+        assert f'Exec=python3 "{os.path.join(REPO, "main.py")}"' in entry
+
+
+def test_install_sh_uninstall_removes_both():
+    with tempfile.TemporaryDirectory() as tmp:
+        _run_install(tmp)
+        result, rules, apps = _run_install(tmp, "--uninstall")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert os.listdir(rules) == [] and os.listdir(apps) == []
+
+
+def test_the_shipped_entry_has_one_main_category():
+    # several main categories make some menus list the app more than once
+    main = {"AudioVideo", "Audio", "Video", "Development", "Education", "Game",
+            "Graphics", "Network", "Office", "Science", "Settings", "System",
+            "Utility"}
+    entry = system.desktop_entry(["x"])
+    line = next(l for l in entry.splitlines() if l.startswith("Categories="))
+    cats = [c for c in line.split("=", 1)[1].split(";") if c]
+    assert len([c for c in cats if c in main]) == 1, cats

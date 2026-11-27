@@ -17,8 +17,9 @@ set -eu
 UDEV_RULE_NAME="99-m711pro.rules"
 DESKTOP_NAME="open-m711pro.desktop"
 
-UDEV_RULE_DIR="/etc/udev/rules.d"
-DESKTOP_DIR="/usr/share/applications"
+# Overridable so the test suite can run this script for real in a sandbox.
+UDEV_RULE_DIR="${UDEV_RULE_DIR:-/etc/udev/rules.d}"
+DESKTOP_DIR="${DESKTOP_DIR:-/usr/share/applications}"
 
 UDEV_RULE_DEST="$UDEV_RULE_DIR/$UDEV_RULE_NAME"
 
@@ -52,6 +53,7 @@ EOF
 }
 
 require_root() {
+    [ "${M711_INSTALL_SKIP_ROOT-}" = 1 ] && return 0     # sandboxed test run
     # id -u is POSIX; 0 is root.
     if [ "$(id -u)" -ne 0 ]; then
         die "this needs root to write to /etc and /usr/share — re-run with sudo"
@@ -131,15 +133,18 @@ do_install() {
     # The entry runs main.py from this checkout, which works whether or not the
     # package was pip-installed: the README's per-distribution steps never run
     # pip, and an entry pointing at 'open-m711pro-gui' did nothing for them.
-    entry=$(mktemp)
-    trap 'rm -f "$entry"' EXIT
+    # in a temp DIRECTORY, so the file keeps its .desktop name: the validator
+    # rejects a file without that extension
+    tmpdir=$(mktemp -d)
+    trap 'rm -rf "$tmpdir"' EXIT
+    entry="$tmpdir/$DESKTOP_NAME"
     # escape what sed's replacement treats specially (& and the | delimiter)
     repo_esc=$(printf '%s' "$REPO_DIR" | sed 's/[&|\\]/\\&/g')
     sed "s|^Exec=.*|Exec=python3 \"$repo_esc/main.py\"|" \
         "$DATA_DIR/$DESKTOP_NAME" > "$entry"
     if command -v desktop-file-validate >/dev/null 2>&1; then
         if ! desktop-file-validate "$entry"; then
-            die "the .desktop file failed validation; nothing was installed"
+            die "the menu entry failed validation and was not installed (the udev rule above was)"
         fi
     fi
     install_file "$entry" "$DESKTOP_DEST"
