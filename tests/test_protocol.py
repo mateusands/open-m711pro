@@ -397,3 +397,15 @@ def test_dpi_text_mentions_the_real_value_only_when_it_differs():
     assert p.dpi_text(0x07) == "700 DPI (≈667 real)"
     assert p.dpi_text(0x0B) == "1000 DPI"
     assert p.dpi_text(0x08) == "750 DPI"
+
+
+# --- tools/measure_dpi.py: the arithmetic of the ruler test -----------------
+def test_measure_dpi_turns_counts_over_a_distance_into_dpi():
+    import importlib.util, os
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "tools", "measure_dpi.py")
+    spec = importlib.util.spec_from_file_location("measure_dpi", path)
+    tool = importlib.util.module_from_spec(spec); spec.loader.exec_module(tool)
+    # 1000 counts over exactly one inch is 1000 DPI, in either direction
+    assert round(tool.cpi(1000, 2.54)) == 1000
+    assert round(tool.cpi(-2626, 10)) == 667    # what 0x07 should give at 10 cm

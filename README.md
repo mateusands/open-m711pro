@@ -375,6 +375,7 @@ standard HID values.
 python3 -m pytest              # byte-match tests
 python3 tools/run_tests.py     # same tests without pytest
 python3 tools/dump_config.py   # read-only dump of the config memory
+sudo python3 tools/measure_dpi.py   # measure the real DPI with a ruler (read-only)
 ```
 
 Every packet builder has a byte-match test against a real capture. That is the
