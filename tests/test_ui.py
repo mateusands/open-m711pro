@@ -194,3 +194,126 @@ def test_a_dpi_row_shows_the_app_label_and_the_real_value():
     # typing the shown value back must keep the same byte
     row.spin.setValue(700); row._from_spin()
     assert row.byte() == 0x07
+
+
+# --- Usability review (2026-11-27) ------------------------------------------
+def _wheel(widget):
+    """Send one wheel notch to `widget`, the way scrolling the page over it does."""
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication
+    centre = QPointF(widget.width() / 2, widget.height() / 2)
+    event = QWheelEvent(centre, widget.mapToGlobal(centre), QPoint(0, 0),
+                        QPoint(0, -120), Qt.NoButton, Qt.NoModifier,
+                        Qt.NoScrollPhase, False)
+    QApplication.sendEvent(widget, event)
+
+
+def test_the_dpi_field_holds_only_the_number():
+    """With " DPI" inside the editable text the cursor landed after the unit,
+    so deleting the number meant deleting the unit first."""
+    if not HAVE_QT:
+        return
+    _qt()
+    from m711pro.ui.qt import DpiRow
+    row = DpiRow("")
+    assert row.spin.suffix() == "" and row.spin.prefix() == ""
+    assert row.spin_y.suffix() == "" and row.spin_y.prefix() == ""
+
+
+def test_scrolling_over_a_control_never_reaches_the_mouse():
+    """Scrolling the page with the pointer over a combo used to change it — and
+    on the buttons page a changed combo is a write to the mouse."""
+    if not HAVE_QT:
+        return
+    stub = _Stub(); stub.install()
+    try:
+        _, window = _window()
+        window._go(2)
+        row = next(iter(window.buttons.rows.values()))
+        before = row.action.currentIndex()
+        stub.sent.clear()
+        _wheel(row.action)
+        _qt().processEvents()
+        assert row.action.currentIndex() == before
+        window._go(1)
+        slider = window.dpi.single.slider
+        before = slider.value()
+        _wheel(slider)
+        assert slider.value() == before
+        assert stub.sent == []
+    finally:
+        stub.restore()
+
+
+def test_moving_the_dpi_slider_without_dragging_still_sends():
+    """A click on the groove or an arrow key moved the value but never sent it,
+    leaving the screen showing a DPI the mouse did not have."""
+    if not HAVE_QT:
+        return
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QAbstractSlider
+    stub = _Stub(); stub.install()
+    try:
+        _, window = _window()
+        window._go(1)
+        window.dpi.mode.setCurrentIndex(0)           # single DPI
+        stub.sent.clear()
+        window.dpi.single.slider.triggerAction(QAbstractSlider.SliderSingleStepAdd)
+        QTest.qWait(700)
+        assert stub.sent, "a keyboard/groove move must reach the mouse"
+        expected = protocol.build_dpi_table_bytes([0x08] * protocol.DPI_STAGES)
+        assert [bytes(p) for p in stub.sent] == [bytes(p) for p in expected]
+    finally:
+        stub.restore()
+
+
+def test_dpi_presets_send_their_value():
+    if not HAVE_QT:
+        return
+    stub = _Stub(); stub.install()
+    try:
+        _, window = _window()
+        window._go(1)
+        window.dpi.mode.setCurrentIndex(0)
+        stub.sent.clear()
+        window.dpi.presets[1600].click()
+        b = protocol.dpi_to_byte(1600)
+        expected = protocol.build_dpi_table_bytes([b] * protocol.DPI_STAGES)
+        assert [bytes(p) for p in stub.sent] == [bytes(p) for p in expected]
+        assert window.dpi.single.spin.value() == 1600
+    finally:
+        stub.restore()
+
+
+def test_button_rows_do_not_show_table_indices():
+    """The register index (10, 11, 9 for buttons 6-8) is an implementation
+    detail; next to the button number it only confused."""
+    if not HAVE_QT:
+        return
+    stub = _Stub(); stub.install()
+    try:
+        _, window = _window()
+        texts = [row.name.text() for row in window.buttons.rows.values()]
+        assert not any(t.lstrip().startswith(("10", "11", "9 ")) for t in texts)
+        widths = {row.name.minimumWidth() for row in window.buttons.rows.values()}
+        assert len(widths) == 1                     # the combos line up
+    finally:
+        stub.restore()
+
+
+def test_opening_the_app_sends_nothing():
+    """Loading a page sets sliders programmatically; that must never be taken
+    for a user move and written to the mouse."""
+    if not HAVE_QT:
+        return
+    from PySide6.QtTest import QTest
+    stub = _Stub(); stub.install()
+    try:
+        _, window = _window()
+        for index in range(len(window.nav_btns)):
+            window._go(index)
+        QTest.qWait(700)                        # past any debounce
+        assert stub.sent == []
+    finally:
+        stub.restore()

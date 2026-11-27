@@ -9,12 +9,12 @@ The core (m711pro.core) stays pure stdlib; only this GUI uses Qt.
 import math
 import colorsys
 
-from PySide6.QtCore import Qt, Signal, QRectF, QPointF
+from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QTimer
 from PySide6.QtGui import QPainter, QColor, QConicalGradient, QRadialGradient, QBrush, QPen
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout,
     QLabel, QComboBox, QSlider, QPushButton, QFrame, QStackedWidget, QColorDialog,
-    QSpinBox, QScrollArea,
+    QSpinBox, QScrollArea, QCheckBox, QAbstractSpinBox,
 )
 
 from ..core import device, state, protocol
@@ -43,6 +43,9 @@ QComboBox {{
     background: #20242e; color: #e8eaed; border: 1px solid #2a2e38;
     border-radius: 6px; padding: 6px 10px; min-width: 180px;
 }}
+QComboBox::drop-down {{ border: none; width: 26px; }}
+QComboBox::down-arrow {{ image: none; width: 0; height: 0; }}
+QComboBox:hover {{ border: 1px solid #3a3f4a; }}
 QComboBox QAbstractItemView {{
     background: #20242e; color: #e8eaed; selection-background-color: {ACCENT};
 }}
@@ -58,7 +61,7 @@ QSlider::handle:horizontal {{
 QSlider::sub-page:horizontal {{ background: {ACCENT}; border-radius: 3px; }}
 QSpinBox {{
     background: #20242e; color: #e8eaed; border: 1px solid #2a2e38;
-    border-radius: 6px; padding: 5px 8px; min-width: 92px;
+    border-radius: 6px; padding: 6px 10px; min-width: 64px; font-size: 13px;
 }}
 QSpinBox:focus {{ border: 1px solid {ACCENT}; }}
 QComboBox#media {{ min-width: 120px; }}
@@ -70,6 +73,20 @@ QScrollBar::handle:vertical:hover {{ background: #3a3f4a; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QWidget[focused="true"] {{ background: #171a21; border-radius: 6px; }}
 QPushButton#swatch {{ border: 1px solid #2a2e38; border-radius: 4px; }}
+QPushButton#preset {{
+    background: #20242e; color: #c9ccd1; border: 1px solid #2a2e38;
+    border-radius: 13px; padding: 4px 12px; font-size: 12px;
+}}
+QPushButton#preset:hover {{ border: 1px solid {ACCENT}; color: #e8eaed; }}
+QPushButton#preset:disabled {{ color: #5a5f68; }}
+QLabel#unit {{ color: #8b9098; font-size: 12px; }}
+QCheckBox {{ color: #e8eaed; spacing: 8px; }}
+QCheckBox:disabled {{ color: #5a5f68; }}
+QCheckBox::indicator {{
+    width: 16px; height: 16px; border: 1px solid #3a3f4a; border-radius: 4px;
+    background: #20242e;
+}}
+QCheckBox::indicator:checked {{ background: {ACCENT}; border: 1px solid {ACCENT}; }}
 QLabel#statusbar {{ background: #191c24; color: #8b9098; padding: 7px 12px; }}
 """
 
@@ -101,6 +118,61 @@ def _combo_pick_raw(combo, base, text):
         item.setEnabled(False)
     combo.setCurrentIndex(base)
     combo.blockSignals(False)
+
+
+# ---------------------------------------------------------------------------
+# Controls that ignore the mouse wheel. Qt changes a combo or slider when the
+# page is scrolled with the pointer over it, and on these pages a changed
+# control is a WRITE to the mouse — so the wheel is handed back to the page,
+# which scrolls instead.
+class Combo(QComboBox):
+    def wheelEvent(self, e):
+        e.ignore()
+
+    def paintEvent(self, e):
+        # the stylesheet hides Qt's arrow (it rendered as a dark block); draw
+        # a plain chevron instead
+        super().paintEvent(e)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QPen(QColor("#8b9098" if self.isEnabled() else "#4a4f58"), 1.6))
+        x, y = self.width() - 18, self.height() / 2
+        p.drawLine(QPointF(x - 4, y - 2), QPointF(x, y + 2))
+        p.drawLine(QPointF(x, y + 2), QPointF(x + 4, y - 2))
+        p.end()
+
+
+class Slider(QSlider):
+    """A horizontal slider that ignores the wheel and reports *settled* moves.
+
+    `settled` fires when the handle is released, and — after a short pause —
+    when the value moved without a drag (a click on the groove, the arrow
+    keys). Committing only on release left those moves on screen but never
+    sent, so the page showed a value the mouse did not have.
+    """
+    settled = Signal()
+    DEBOUNCE_MS = 350
+
+    def __init__(self):
+        super().__init__(Qt.Horizontal)
+        self._timer = QTimer(self); self._timer.setSingleShot(True)
+        self._timer.setInterval(self.DEBOUNCE_MS)
+        self._timer.timeout.connect(self.settled)
+        # actionTriggered fires for USER actions only (keys, groove clicks) —
+        # never for setValue/setRange, so loading a page cannot send anything.
+        self.actionTriggered.connect(self._acted)
+        self.sliderReleased.connect(self._released)
+
+    def _acted(self, action):
+        if action != QSlider.SliderMove:       # a drag ends in sliderReleased
+            self._timer.start()
+
+    def _released(self):
+        self._timer.stop()
+        self.settled.emit()
+
+    def wheelEvent(self, e):
+        e.ignore()
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +270,7 @@ class LightingPage(QWidget):
 
         er = QHBoxLayout()
         lbl = QLabel("EFFECT"); lbl.setObjectName("muted"); er.addWidget(lbl)
-        self.effect = QComboBox(); self.effect.addItems(EFFECTS)
+        self.effect = Combo(); self.effect.addItems(EFFECTS)
         self.effect.currentTextChanged.connect(self._on_effect)
         er.addWidget(self.effect); er.addStretch(); root.addLayout(er)
 
@@ -216,18 +288,18 @@ class LightingPage(QWidget):
         right.addWidget(self.readout)
 
         bl = QLabel("BRIGHTNESS"); bl.setObjectName("muted"); right.addWidget(bl)
-        self.bright = QSlider(Qt.Horizontal); self.bright.setRange(15, 100)
+        self.bright = Slider(); self.bright.setRange(15, 100)
         self.bright.setValue(100); self.bright.setFixedWidth(180)
         self.bright.valueChanged.connect(self._on_bright)
-        self.bright.sliderReleased.connect(self._commit_current)
+        self.bright.settled.connect(self._commit_current)
         right.addWidget(self.bright)
 
         # Speed — only shown for animated effects
         self.speed_label = QLabel("SPEED (Slow -> Fast)")
         self.speed_label.setObjectName("muted"); right.addWidget(self.speed_label)
-        self.speed = QSlider(Qt.Horizontal); self.speed.setRange(0, 100)
+        self.speed = Slider(); self.speed.setRange(0, 100)
         self.speed.setValue(50); self.speed.setFixedWidth(180)
-        self.speed.sliderReleased.connect(self._commit_current)
+        self.speed.settled.connect(self._commit_current)
         right.addWidget(self.speed)
 
         pr = QGridLayout(); pr.setSpacing(4)
@@ -390,10 +462,27 @@ class DpiSpinBox(QSpinBox):
     are shown as the official app labels them (700, not the 667 the step
     decodes to); the row's note carries the real value.
     """
+    def __init__(self):
+        super().__init__()
+        # Only the number is editable: the unit lives in a label beside it.
+        # With " DPI" as a suffix the cursor landed after the unit and clearing
+        # the field meant fighting it.
+        self.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.setRange(protocol.DPI_MIN, protocol.DPI_MAX)
+        self.setFixedWidth(84)
+
     def stepBy(self, steps):
         b = protocol.dpi_to_byte(self.value()) + steps
         b = max(0, min(protocol.DPI_BYTE_MAX, b))
         self.setValue(protocol.dpi_display(b))
+
+    def focusInEvent(self, e):
+        super().focusInEvent(e)
+        QTimer.singleShot(0, self.selectAll)     # click, type, Enter
+
+    def wheelEvent(self, e):
+        e.ignore()
 
 
 class DpiRow(QWidget):
@@ -424,25 +513,24 @@ class DpiRow(QWidget):
             self.color.clicked.connect(self.color_clicked)
             lay.addWidget(self.color)
 
-        self.slider = QSlider(Qt.Horizontal)
+        self.slider = Slider()
         self.slider.setRange(0, protocol.DPI_BYTE_MAX)
         self.spin = DpiSpinBox()
-        self.spin.setRange(protocol.DPI_MIN, protocol.DPI_MAX)
-        self.spin.setSuffix(" DPI")
+        unit = QLabel("DPI"); unit.setObjectName("unit")
         # Y axis, hidden unless the user asks for independent axes.
+        self.y_label = QLabel("Y"); self.y_label.setObjectName("unit")
         self.spin_y = DpiSpinBox()
-        self.spin_y.setRange(protocol.DPI_MIN, protocol.DPI_MAX)
-        self.spin_y.setPrefix("Y "); self.spin_y.setSuffix(" DPI")
-        self.spin_y.setVisible(False)
+        self.y_label.setVisible(False); self.spin_y.setVisible(False)
         self.spin_y.editingFinished.connect(self.edited)
         # The real value, when the app-style label rounds it (700 -> ≈667).
         self.real = QLabel(""); self.real.setObjectName("muted")
-        self.real.setMinimumWidth(78)
+        self.real.setFixedWidth(76)
         lay.addWidget(self.slider, 1); lay.addWidget(self.spin)
-        lay.addWidget(self.real); lay.addWidget(self.spin_y)
+        lay.addWidget(unit); lay.addWidget(self.real)
+        lay.addWidget(self.y_label); lay.addWidget(self.spin_y)
 
         self.slider.valueChanged.connect(self._show_byte)
-        self.slider.sliderReleased.connect(self.edited)
+        self.slider.settled.connect(self.edited)
         self.spin.editingFinished.connect(self._from_spin)
         self.setEnabled(False)
 
@@ -458,6 +546,10 @@ class DpiRow(QWidget):
         self._set_spin(protocol.dpi_display(b))
         real = protocol.byte_to_dpi(b)
         self.real.setText("" if real == protocol.dpi_display(b) else f"≈{real} real")
+        self.real.setToolTip("" if not self.real.text() else
+                             "The mouse stores DPI in steps of ~83; this is the "
+                             "value it really holds. The official app shows the "
+                             "rounded number.")
 
     def _set_spin(self, dpi):
         self.spin.blockSignals(True)
@@ -491,6 +583,7 @@ class DpiRow(QWidget):
         return x, protocol.dpi_to_byte(self.spin_y.value())
 
     def show_y(self, flag):
+        self.y_label.setVisible(flag)
         self.spin_y.setVisible(flag)
 
     def set_color(self, rgb):
@@ -538,7 +631,7 @@ class DpiPage(QWidget):
 
         mr = QHBoxLayout()
         mr.addWidget(self._muted("MODE")); mr.addSpacing(8)
-        self.mode = QComboBox()
+        self.mode = Combo()
         for _, rotulo in self.MODES:
             self.mode.addItem(rotulo)
         saved = state.load().get("dpi_mode", "single")
@@ -554,6 +647,16 @@ class DpiPage(QWidget):
         self.single = DpiRow("")
         self.single.edited.connect(self._commit_single)
         sb.addWidget(self.single)
+        # Quick picks: the slider is linear up to ~16000, so the values people
+        # actually use sit in its first fifth and are fiddly to hit.
+        pr = QHBoxLayout(); pr.setSpacing(6)
+        self.presets = {}
+        for dpi in (400, 800, 1600, 3200, 6400):
+            chip = QPushButton(str(dpi)); chip.setObjectName("preset")
+            chip.setCursor(Qt.PointingHandCursor); chip.setEnabled(False)
+            chip.clicked.connect(lambda _=False, v=dpi: self._preset(v))
+            pr.addWidget(chip); self.presets[dpi] = chip
+        pr.addStretch(); sb.addLayout(pr)
         self.single_note = QLabel(""); self.single_note.setObjectName("muted")
         self.single_note.setWordWrap(True); sb.addWidget(self.single_note)
         root.addWidget(self.single_box)
@@ -576,25 +679,27 @@ class DpiPage(QWidget):
         root.addWidget(self.stages_box)
 
         hint = QLabel(
-            f"DPI is a single byte with a step of ~{protocol.DPI_STEP:.0f}. Values are "
-            "shown as the official app labels them; when the mouse really holds "
-            "something slightly different (700 is stored as ≈667), the real value "
-            "appears next to the field. Exact: 1000, 2000, 4000, 8000.")
+            "Type a value and press Enter, drag the slider, or pick a preset. "
+            f"The mouse works in steps of ~{protocol.DPI_STEP:.0f} DPI: values are "
+            "shown the way the official app shows them, with the real one beside "
+            "them when it differs (700 is really ≈667).")
         hint.setObjectName("muted"); hint.setWordWrap(True); root.addWidget(hint)
 
-        root.addWidget(self._muted("DPI STAGE INDICATOR (DPI EFFECT)"))
-        self.effect_btn = QPushButton("—"); self.effect_btn.setObjectName("action")
-        self.effect_btn.setCheckable(True); self.effect_btn.setEnabled(False)
+        root.addSpacing(6)
+        root.addWidget(self._muted("DPI STAGE INDICATOR"))
+        self.effect_btn = QCheckBox("Light the LED in the active stage's colour "
+                                    "(DPI Effect)")
+        self.effect_btn.setEnabled(False)
         self.effect_btn.clicked.connect(self._toggle_effect)
-        er = QHBoxLayout(); er.addWidget(self.effect_btn); er.addStretch()
-        root.addLayout(er)
+        root.addWidget(self.effect_btn)
+        root.addSpacing(6)
 
         # --- USB polling rate (register 0x0000) ---
         # The choices come from protocol.POLLING_RATES so the page cannot drift
         # from the rates the protocol can actually build.
         pol = QHBoxLayout()
         pol.addWidget(self._muted("POLLING RATE (Hz)")); pol.addSpacing(8)
-        self.polling = QComboBox()
+        self.polling = Combo()
         for hz in self._polling_rates:
             self.polling.addItem(f"{hz} Hz")
         self.polling.setEnabled(False)          # only a successful read wakes it
@@ -678,12 +783,13 @@ class DpiPage(QWidget):
         self.xy.setEnabled(flag)
         self.single.setEnabled(flag)
         self.effect_btn.setEnabled(flag)
+        for chip in self.presets.values():
+            chip.setEnabled(flag)
         if not flag:
             self.polling.setEnabled(False)   # only its own read wakes it again
 
     def _show_effect(self, on):
         self.effect_btn.setChecked(on)
-        self.effect_btn.setText("On" if on else "Off")
 
     def _show_polling(self, hz, code):
         """Make the combo reflect the rate we believe the register holds.
@@ -746,6 +852,10 @@ class DpiPage(QWidget):
         self._raw = [x for x, _ in self._axes]
         self._update_single_note()
         self.status.emit(f"{msg} — via {', '.join(vias)}", False)
+
+    def _preset(self, dpi):
+        self.single.set_byte(protocol.dpi_to_byte(dpi))
+        self._commit_single()
 
     def _commit_single(self):
         b = self.single.byte()
@@ -930,20 +1040,25 @@ class ButtonRow(QWidget):
         self.index = index
         lay = QHBoxLayout(self); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(10)
 
-        name = PHYSICAL_BUTTONS.get(index)
-        lb = QLabel(f"{index:2d}  {name}" if name else f"{index:2d}  unused")
-        lb.setObjectName("" if name else "muted")
-        lb.setMinimumWidth(112)
-        lay.addWidget(lb)
+        # The number printed on the mouse, never the table index behind it
+        # (buttons 6-8 live at 10, 11 and 9 — an implementation detail).
+        label = next((n for n, (_, i, _r) in MouseDiagram.BUTTONS.items()
+                      if i == index), None)
+        role = MouseDiagram.BUTTONS[label][2] if label else "unused"
+        self.name = QLabel(f"Button {label}  <span style='color:#8b9098'>{role}</span>"
+                           if label else f"Slot {index}  (unused)")
+        self.name.setFixedWidth(150)
+        self.name.setMinimumWidth(150)
+        lay.addWidget(self.name)
 
-        self.action = QComboBox()
+        self.action = Combo()
         for label, _ in BUTTON_ACTIONS:
             self.action.addItem(label)
         self.action.currentIndexChanged.connect(
             lambda _idx: self.action_edited.emit(self.index))
         lay.addWidget(self.action, 1)
 
-        self.media = QComboBox(); self.media.setObjectName("media")
+        self.media = Combo(); self.media.setObjectName("media")
         for label, _ in MEDIA_KEYS:
             self.media.addItem(label)
         self.media.currentIndexChanged.connect(
