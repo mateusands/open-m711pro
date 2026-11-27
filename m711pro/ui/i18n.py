@@ -161,8 +161,8 @@ PT = {
     # buttons
     "BUTTONS": "BOTÕES",
     "Button {n}": "Botão {n}",
-    "left click": "clique esquerdo",
-    "right click": "clique direito",
+    "left click": "esquerdo",
+    "right click": "direito",
     "wheel": "roda",
     "side": "lateral",
     "top": "topo",
@@ -207,6 +207,11 @@ PT = {
     "Volume up": "Volume +",
     "Volume down": "Volume −",
     "unknown slot": "desconhecido",
+    "Keyboard key": "Tecla do teclado",
+    "Key combination": "Combinação",
+    "Button {n} = key '{key}'": "Botão {n} = tecla '{key}'",
+    "Button {n} = {combo}": "Botão {n} = {combo}",
+    "Space": "Espaço",
     "Factory reset (not assignable here)":
         "Reset de fábrica (não atribuível aqui)",
     "unknown (usage {usage})": "desconhecido (código {usage})",

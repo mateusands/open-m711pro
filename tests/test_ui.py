@@ -57,7 +57,7 @@ class _Stub:
         self._saved = {name: getattr(device, name) for name in (
             "find_devices", "send_packets", "read_register", "read_buttons",
             "read_dpi_axes", "read_dpi_bytes", "read_dpi_colors",
-            "read_dpi_effect", "read_polling", "read_led_state",
+            "read_dpi_effect", "read_polling", "read_led_state", "read_ext_slot",
             "send_color", "send_breathing", "send_cycle", "send_off",
             "_send_feature", "_read_from")}
 
@@ -75,6 +75,8 @@ class _Stub:
         device.read_dpi_colors = lambda: [(255, 0, 0)] * protocol.DPI_STAGES
         device.read_dpi_effect = lambda: (True, (0x01, 0x03))
         device.read_polling = lambda: (1000, 0x01)
+        self.ext = {}                       # index -> what read_ext_slot returns
+        device.read_ext_slot = lambda index: self.ext.get(index)
         device.read_led_state = lambda: {"effect": "Steady", "rgb": [0, 0, 255],
                                          "speed": 0x96, "brightness": 0xFF}
         for name in ("send_color", "send_breathing", "send_cycle"):
@@ -410,3 +412,65 @@ def test_a_factory_reset_button_is_named_but_not_selectable():
     assert "Factory reset" in row.action.currentText()
     assert row.current_action() is None                  # never sent back
     assert protocol.BTN_FACTORY_RESET not in [a for _, a in BUTTON_ACTIONS]
+
+
+
+# --- Keyboard keys and combinations on the buttons page -----------------------
+def _buttons_window(stub):
+    _, window = _window()
+    window._go(2)
+    _qt().processEvents()
+    return window.buttons
+
+
+def test_a_button_holding_a_combo_shows_it():
+    if not HAVE_QT:
+        return
+    stub = _Stub(); stub.install()
+    stub.ext = {9: ("media", protocol.MEDIA_PREVIOUS), 10: ("combo", 0x01, 0x06),
+                11: ("key", 0x04)}
+    try:
+        page = _buttons_window(stub)
+        combo_row, key_row = page.rows[10], page.rows[11]
+        assert combo_row.current_kind() == "combo"
+        assert combo_row.mods.currentData() == 0x01 and combo_row.key.currentData() == 0x06
+        assert combo_row.key.isVisibleTo(page) and not combo_row.media.isVisibleTo(page)
+        assert key_row.current_kind() == "key" and key_row.key.currentData() == 0x04
+        assert not key_row.mods.isVisibleTo(page)
+    finally:
+        stub.restore()
+
+
+def test_choosing_a_keyboard_key_writes_the_key_record():
+    if not HAVE_QT:
+        return
+    stub = _Stub(); stub.install()
+    try:
+        page = _buttons_window(stub)
+        row = page.rows[9]
+        stub.sent.clear()
+        row.action.setCurrentIndex(row.action.findText("Keyboard key"))
+        _qt().processEvents()
+        sent = [bytes(pk) for pk in stub.sent if not isinstance(pk, tuple)]
+        expected = [bytes(pk) for pk in protocol.build_key(9, row.key.currentData())]
+        assert sent[:len(expected)] == expected
+    finally:
+        stub.restore()
+
+
+def test_changing_the_modifier_rewrites_the_combo():
+    if not HAVE_QT:
+        return
+    stub = _Stub(); stub.install()
+    stub.ext = {10: ("combo", 0x01, 0x06)}
+    try:
+        page = _buttons_window(stub)
+        row = page.rows[10]
+        stub.sent.clear()
+        row.mods.setCurrentIndex(row.mods.findData(0x01 | 0x02))      # Ctrl+Shift
+        _qt().processEvents()
+        sent = [bytes(pk) for pk in stub.sent if not isinstance(pk, tuple)]
+        expected = [bytes(pk) for pk in protocol.build_combo(10, 0x03, 0x06)]
+        assert sent[:len(expected)] == expected
+    finally:
+        stub.restore()

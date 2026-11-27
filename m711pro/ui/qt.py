@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import device, state, protocol
+from ..data.hid_keys import KEYS
 from .i18n import tr, tr_error, LANGUAGES, language, set_language
 
 ACCENT = "#19b8c8"
@@ -67,6 +68,9 @@ QSpinBox {{
 }}
 QSpinBox:focus {{ border: 1px solid {ACCENT}; }}
 QComboBox#media {{ min-width: 120px; }}
+QComboBox#buttonAction {{ min-width: 140px; }}
+QComboBox#mods {{ min-width: 84px; }}
+QComboBox#key {{ min-width: 64px; }}
 QComboBox:disabled {{ color: #5a5f68; border: 1px solid #23262e; }}
 QScrollArea#rows, QWidget#rowsBody {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
@@ -968,8 +972,26 @@ BUTTON_ACTIONS = [
     ("RGB on/off", protocol.btn_rgb_toggle()),
     ("Polling rate switch", protocol.btn_polling_switch()),
     ("Multimedia key", protocol.BTN_EXTENDED),
+    ("Keyboard key", protocol.BTN_EXTENDED),
+    ("Key combination", protocol.BTN_EXTENDED),
     ("Disabled", protocol.BTN_NONE),
 ]
+
+# The three entries above share BTN_EXTENDED: the basic record only says "the
+# action lives in the extended slot"; the slot's event list says which kind.
+EXT_KINDS = {"Multimedia key": "media", "Keyboard key": "key",
+             "Key combination": "combo"}
+
+# Keyboard keys offered in the UI, in the HID table's order (a-z, 1-0, F1-F12,
+# then the named keys). The usages are the ones the CLI's key: prefix uses.
+KEY_CHOICES = [(name.upper() if len(name) == 1 or name[1:].isdigit()
+                else name.capitalize(), code)
+               for name, code in KEYS.items()]
+
+# Modifier sets for a combination: the HID modifier bits carried by the
+# 0x80/0x40 events (Ctrl+C was verified byte for byte with 0x01).
+MOD_CHOICES = [("Ctrl", 0x01), ("Shift", 0x02), ("Alt", 0x04), ("Win", 0x08),
+               ("Ctrl+Shift", 0x03), ("Ctrl+Alt", 0x05), ("Alt+Shift", 0x06)]
 
 MEDIA_KEYS = [
     ("Play / pause", protocol.MEDIA_PLAY_PAUSE),
@@ -1074,11 +1096,21 @@ PHYSICAL_BUTTONS = {
 }
 
 
+def _pick_data(combo, base, value, raw_text):
+    """Select the entry whose data is `value`, or show `raw_text` unselectable."""
+    for i in range(base):
+        if combo.itemData(i) == value:
+            _combo_pick(combo, base, i)
+            return
+    _combo_pick_raw(combo, base, raw_text)
+
+
 class ButtonRow(QWidget):
     """One slot of the button table: a label, an action combo and, when the
-    action lives in an extended slot, a multimedia combo next to it."""
+    action lives in an extended slot, the fields that say what it sends — a
+    multimedia key, a keyboard key, or a modifier plus a key."""
     action_edited = Signal(int)     # emits the slot index
-    media_edited = Signal(int)
+    ext_edited = Signal(int)        # the multimedia/key/modifier field changed
 
     def __init__(self, index):
         super().__init__()
@@ -1093,66 +1125,122 @@ class ButtonRow(QWidget):
         self.name = QLabel(f"{tr('Button {n}', n=label)}  "
                            f"<span style='color:#8b9098'>{tr(role)}</span>"
                            if label else f"Slot {index}  (unused)")
-        self.name.setFixedWidth(150)
-        self.name.setMinimumWidth(150)
+        self.name.setFixedWidth(132)
+        self.name.setMinimumWidth(132)
         lay.addWidget(self.name)
 
-        self.action = Combo()
-        for label, _ in BUTTON_ACTIONS:
-            self.action.addItem(tr(label))
+        self.action = Combo(); self.action.setObjectName("buttonAction")
+        for text, _ in BUTTON_ACTIONS:
+            self.action.addItem(tr(text))
         self.action.currentIndexChanged.connect(
             lambda _idx: self.action_edited.emit(self.index))
         lay.addWidget(self.action, 1)
 
-        self.media = Combo(); self.media.setObjectName("media")
-        for label, _ in MEDIA_KEYS:
-            self.media.addItem(tr(label))
-        self.media.currentIndexChanged.connect(
-            lambda _idx: self.media_edited.emit(self.index))
-        self.media.hide()
-        lay.addWidget(self.media, 1)
+        def field(choices, name):
+            combo = Combo(); combo.setObjectName(name)
+            for text, value in choices:
+                combo.addItem(tr(text), value)
+            combo.currentIndexChanged.connect(
+                lambda _idx: self.ext_edited.emit(self.index))
+            combo.hide()
+            return combo
+
+        self.media = field(MEDIA_KEYS, "media")
+        self.mods = field(MOD_CHOICES, "mods")
+        self.key = field(KEY_CHOICES, "key")
+        lay.addWidget(self.media, 1); lay.addWidget(self.mods); lay.addWidget(self.key)
 
         self.setEnabled(False)
 
     # -- state --------------------------------------------------------------
-    def set_action(self, action):
+    def set_action(self, action, ext=None):
+        """Show `action`; for BTN_EXTENDED, `ext` is what read_ext_slot found."""
         action = tuple(action)
         if action == protocol.BTN_FACTORY_RESET:
             # recognised, shown by name, and like any raw entry never sent back
             _combo_pick_raw(self.action, len(BUTTON_ACTIONS),
                             tr("Factory reset (not assignable here)"))
+            self.show_ext(None)
+            return
+        if action == protocol.BTN_EXTENDED:
+            kind = ext[0] if ext else "media"     # erased/unknown: say so there
+            label = next(t for t, k in EXT_KINDS.items() if k == kind)
+            _combo_pick(self.action, len(BUTTON_ACTIONS),
+                        [t for t, _ in BUTTON_ACTIONS].index(label))
+            self._set_ext(ext)
+            self.show_ext(kind)
             return
         for i, (_, known) in enumerate(BUTTON_ACTIONS):
             if known == action:
                 _combo_pick(self.action, len(BUTTON_ACTIONS), i)
+                self.show_ext(None)
                 return
         _combo_pick_raw(self.action, len(BUTTON_ACTIONS),
                         tr("unknown ({raw})",
                            raw="{:02x} {:02x} {:02x}".format(*action)))
+        self.show_ext(None)
+
+    def _set_ext(self, ext):
+        if not ext:
+            _combo_pick_raw(self.media, len(MEDIA_KEYS), tr("unknown slot"))
+            return
+        kind, *values = ext
+        unknown = lambda v: tr("unknown (usage {usage})", usage=f"{v:04x}")
+        if kind == "media":
+            _pick_data(self.media, len(MEDIA_KEYS), values[0], unknown(values[0]))
+        elif kind == "key":
+            _pick_data(self.key, len(KEY_CHOICES), values[0], unknown(values[0]))
+        else:
+            _pick_data(self.mods, len(MOD_CHOICES), values[0], unknown(values[0]))
+            _pick_data(self.key, len(KEY_CHOICES), values[1], unknown(values[1]))
 
     def current_action(self):
         """The action tuple to send, or None when the entry is a raw byte dump."""
         i = self.action.currentIndex()
         return BUTTON_ACTIONS[i][1] if i < len(BUTTON_ACTIONS) else None
 
-    def set_media(self, usage):
-        for i, (_, known) in enumerate(MEDIA_KEYS):
-            if known == usage:
-                _combo_pick(self.media, len(MEDIA_KEYS), i)
-                return
-        text = (tr("unknown slot") if usage is None
-                else tr("unknown (usage {usage})", usage=f"{usage:04x}"))
-        _combo_pick_raw(self.media, len(MEDIA_KEYS), text)
+    def current_kind(self):
+        """"media", "key" or "combo" for an extended action, else None."""
+        i = self.action.currentIndex()
+        return EXT_KINDS.get(BUTTON_ACTIONS[i][0]) if i < len(BUTTON_ACTIONS) else None
 
-    def current_media(self):
-        i = self.media.currentIndex()
-        return MEDIA_KEYS[i][1] if i < len(MEDIA_KEYS) else None
+    def ensure_ext_choice(self):
+        """An explicit pick of an extended kind needs a value to send: replace a
+        raw "unknown" entry by the first real choice."""
+        kind = self.current_kind()
+        fields = {"media": [(self.media, MEDIA_KEYS)],
+                  "key": [(self.key, KEY_CHOICES)],
+                  "combo": [(self.mods, MOD_CHOICES), (self.key, KEY_CHOICES)]}
+        for combo, choices in fields.get(kind, []):
+            if combo.currentIndex() >= len(choices):
+                _combo_pick(combo, len(choices), 0)
 
-    def pick_first_media(self):
-        _combo_pick(self.media, len(MEDIA_KEYS), 0)
+    def current_ext(self):
+        """What to write into the slot, or None when any field is a raw entry."""
+        kind = self.current_kind()
+        if kind == "media":
+            usage = self.media.currentData()
+            return None if usage is None else ("media", usage)
+        if kind == "key":
+            usage = self.key.currentData()
+            return None if usage is None else ("key", usage)
+        if kind == "combo":
+            mods, usage = self.mods.currentData(), self.key.currentData()
+            return None if mods is None or usage is None else ("combo", mods, usage)
+        return None
 
-    def show_media(self, flag):
-        self.media.setVisible(flag)
+    def ext_text(self):
+        kind = self.current_kind()
+        if kind == "media":
+            return self.media.currentText()
+        if kind == "key":
+            return self.key.currentText()
+        return f"{self.mods.currentText()}+{self.key.currentText()}"
+
+    def show_ext(self, kind):
+        self.media.setVisible(kind == "media")
+        self.mods.setVisible(kind == "combo")
+        self.key.setVisible(kind in ("key", "combo"))
 
 
 class ButtonsPage(QWidget):
@@ -1170,7 +1258,7 @@ class ButtonsPage(QWidget):
         self.setObjectName("page")
         self._loaded = False
         self._table = [protocol.BTN_NONE] * protocol.BUTTON_COUNT
-        self._media = {}                 # index -> usage read from the ext slot
+        self._ext = {}                   # index -> what read_ext_slot decoded
         root = QVBoxLayout(self); root.setContentsMargins(22, 22, 22, 22); root.setSpacing(12)
 
         head = QHBoxLayout()
@@ -1200,7 +1288,7 @@ class ButtonsPage(QWidget):
             index = MouseDiagram.BUTTONS[label][1]
             row = ButtonRow(index)
             row.action_edited.connect(self._on_action)
-            row.media_edited.connect(self._on_media)
+            row.ext_edited.connect(self._send_ext)
             rows.addWidget(row); self.rows[index] = row
         rows.addStretch()
 
@@ -1256,44 +1344,29 @@ class ButtonsPage(QWidget):
             self.status.emit(tr("Could not read the buttons — did the mouse answer?"), True)
             return
         self._table = [tuple(a) for a in table]
-        self._media = {}
+        self._ext = {}
         for i, action in enumerate(self._table):
             if i not in self.rows:          # a slot no button fires; kept, not shown
                 continue
             if action == protocol.BTN_EXTENDED:
-                self._media[i] = self._read_media(i)
+                self._ext[i] = self._read_ext(i)
             self._show(i)
         self._enable(True)
         self._loaded = True
         self.status.emit(tr("Buttons read from the mouse."), False)
 
     @staticmethod
-    def _read_media(index):
-        """The multimedia usage stored in the extended slot, or None.
-
-        None also means "a slot we do not decode" (a keyboard combo or a macro),
-        which the row then shows as unknown.
-        """
+    def _read_ext(index):
+        """What the extended slot holds, decoded — or None (erased, a macro, or
+        a layout we do not build), which the row then shows as unknown."""
         try:
-            reply = device.read_register(protocol.ext_slot_addr(index), 8)
+            return device.read_ext_slot(index)
         except (device.DeviceNotFound, OSError):
             return None
-        if not reply or len(reply) < 14:
-            return None
-        data = reply[6:14]
-        if data[0] != 0x02 or data[1] != protocol.EVENT_MEDIA_DOWN:
-            return None
-        return data[2] | (data[3] << 8)
 
     def _show(self, index):
         """Make row `index` reflect the state we believe the hardware holds."""
-        row = self.rows[index]
-        action = self._table[index]
-        row.set_action(action)
-        extended = action == protocol.BTN_EXTENDED
-        if extended:
-            row.set_media(self._media.get(index))
-        row.show_media(extended)
+        self.rows[index].set_action(self._table[index], self._ext.get(index))
 
     def _enable(self, flag):
         for row in self.rows.values():
@@ -1306,9 +1379,9 @@ class ButtonsPage(QWidget):
         if action is None:                       # a raw byte entry — never sent
             return
         if action == protocol.BTN_EXTENDED:
-            if row.current_media() is None:
-                row.pick_first_media()           # an explicit choice needs a key
-            self._send_media(index)
+            row.show_ext(row.current_kind())
+            row.ensure_ext_choice()              # an explicit choice needs a value
+            self._send_ext(index)
             return
         label = row.action.currentText()
         try:
@@ -1318,34 +1391,35 @@ class ButtonsPage(QWidget):
             self.status.emit(tr("Error: {error}", error=tr_error(exc)), True)
             return
         self._table = [tuple(a) for a in table]
-        self._media.pop(index, None)
-        row.show_media(False)
+        self._ext.pop(index, None)
+        row.show_ext(None)
         self.status.emit(tr("{what} — via {routes}",
                             what=tr("Button {n} = {action}", n=self._number(index),
                                     action=label),
                             routes=", ".join(routes)), False)
 
-    def _on_media(self, index):
-        self._send_media(index)
-
-    def _send_media(self, index):
+    def _send_ext(self, index):
+        """Write the extended slot (and the table) for button `index`."""
         row = self.rows[index]
-        usage = row.current_media()
-        if usage is None:                        # a raw slot dump — never sent
+        ext = row.current_ext()
+        if ext is None:                          # a raw entry — never sent
             return
-        label = row.media.currentText()
+        kind = ext[0]
+        senders = {"media": device.send_media, "key": device.send_key,
+                   "combo": device.send_combo}
         try:
-            routes, table = device.send_media(index, usage)
+            routes, table = senders[kind](index, *ext[1:])
         except (device.DeviceNotFound, ValueError) as exc:
             self._show(index)                    # undo the visual change
             self.status.emit(tr("Error: {error}", error=tr_error(exc)), True)
             return
         self._table = [tuple(a) for a in table]
-        self._media[index] = usage
-        row.show_media(True)
-        self.status.emit(tr("{what} — via {routes}",
-                            what=tr("Button {n} = media '{key}'",
-                                    n=self._number(index), key=label),
+        self._ext[index] = ext
+        n = self._number(index)
+        what = {"media": tr("Button {n} = media '{key}'", n=n, key=row.ext_text()),
+                "key": tr("Button {n} = key '{key}'", n=n, key=row.ext_text()),
+                "combo": tr("Button {n} = {combo}", n=n, combo=row.ext_text())}[kind]
+        self.status.emit(tr("{what} — via {routes}", what=what,
                             routes=", ".join(routes)), False)
 
 

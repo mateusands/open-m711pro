@@ -459,6 +459,50 @@ def build_events(index, events):
             for off in range(0, len(data), MAX_DATA)]
 
 
+def parse_events(data):
+    """Decode an extended-slot record back into [(type, code), ...].
+
+    The inverse of build_events. Returns None for anything that is not a
+    well-formed record — an erased slot (all 0xFF, as a factory reset leaves
+    it), a bad checksum, or too few bytes — so a caller never shows a guess.
+    """
+    data = bytes(data)
+    if not data:
+        return None
+    count = data[0]
+    size = 1 + 3 * count + 1
+    if count == 0 or count == 0xFF or len(data) < size:
+        return None
+    if checksum(data[:size - 1]) != data[size - 1]:
+        return None
+    return [(data[1 + 3 * i], data[2 + 3 * i] | (data[3 + 3 * i] << 8))
+            for i in range(count)]
+
+
+def ext_action(events):
+    """Classify an event list as one of the shapes this project builds.
+
+    ("media", usage), ("key", usage) or ("combo", modifiers, usage) — exactly
+    the records build_media / build_key / build_combo write. Anything else (a
+    macro, an unknown layout) is None: shown as unknown, never rewritten.
+    """
+    if not events:
+        return None
+    if len(events) == 2:
+        (t1, c1), (t2, c2) = events
+        if (t1, t2) == (EVENT_MEDIA_DOWN, EVENT_MEDIA_UP) and c1 == c2:
+            return ("media", c1)
+        if (t1, t2) == (EVENT_KEY_DOWN, EVENT_KEY_UP) and c1 == c2:
+            return ("key", c1)
+    if len(events) == 4:
+        (t1, m1), (t2, k1), (t3, m2), (t4, k2) = events
+        if ((t1, t2, t3, t4) == (EVENT_MOD_DOWN, EVENT_KEY_DOWN,
+                                 EVENT_MOD_UP, EVENT_KEY_UP)
+                and m1 == m2 and k1 == k2):
+            return ("combo", m1, k1)
+    return None
+
+
 def build_media(index, usage):
     """Write a multimedia key into the extended slot of button `index`.
 

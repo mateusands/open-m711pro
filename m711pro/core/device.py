@@ -20,6 +20,7 @@ from .protocol import (build_color, build_breathing, build_cycle, build_off,
                        BUTTON_ADDR, BUTTON_COUNT, BTN_EXTENDED,
                        build_polling, polling_from_byte, POLLING_ADDR)
 from . import state
+from . import protocol
 
 EFFECT_NAMES = {0x00: "Cycle", 0x01: "Breathing", 0x02: "Steady", 0x04: "Off"}
 
@@ -402,6 +403,24 @@ def read_buttons():
         out.append(tuple(data[0:3]))
         out.append(tuple(data[4:7]))
     return out
+
+
+def read_ext_slot(index):
+    """What button `index`'s extended slot holds, decoded.
+
+    ("media", usage), ("key", usage), ("combo", modifiers, usage), or None for
+    an erased, unreadable or unrecognised slot. Reads 20 bytes in two LEN-10
+    requests (the shape the official app reads with): a combination is a
+    14-byte record, more than one 8-byte read returns.
+    """
+    base = protocol.ext_slot_addr(index)
+    data = []
+    for addr in (base, base + 10):
+        reply = read_register(addr, 10)
+        if not reply or len(reply) < 16:
+            return None
+        data += list(reply[6:16])
+    return protocol.ext_action(protocol.parse_events(data))
 
 
 def send_buttons(actions):

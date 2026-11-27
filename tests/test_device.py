@@ -553,3 +553,19 @@ def test_the_not_found_message_does_not_recommend_mode_0666():
         assert "0666" not in str(exc)
     finally:
         device.find_devices = original
+
+
+def test_read_ext_slot_reads_twenty_bytes_and_classifies():
+    ctrl_c = list(bytes.fromhex("04 80 01 00 81 06 00 40 01 00 41 06 00 c1"))
+    base = protocol.ext_slot_addr(10)
+    fake = FakeDevice({base: ctrl_c[:10], base + 10: ctrl_c[10:] + [0xff] * 6})
+    with stubbed(fake):
+        assert device.read_ext_slot(10) == ("combo", 0x01, 0x06)
+    assert fake.reads == [(base, 10), (base + 10, 10)]
+
+
+def test_read_ext_slot_returns_none_for_an_erased_slot():
+    base = protocol.ext_slot_addr(9)
+    fake = FakeDevice({base: [0xff] * 10, base + 10: [0xff] * 10})
+    with stubbed(fake):
+        assert device.read_ext_slot(9) is None

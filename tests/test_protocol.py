@@ -439,3 +439,39 @@ def test_measure_dpi_drains_motion_queued_between_runs():
 # slots erased. Named so it is recognised; deliberately NOT offered as an action.
 def test_type_09_is_named_factory_reset():
     assert p.BTN_FACTORY_RESET == (0x09, 0x00, 0x00)
+
+
+# --- Reading an extended slot back -------------------------------------------
+# The inverse of build_events. Fixtures are records READ from this mouse or
+# written by the official app: Play/Pause at 0x0240, the single key in slot
+# 0x0120 and the Ctrl+C record quoted in build_combo.
+PLAY_SLOT = bytes.fromhex("02 82 cd 00 42 cd 00 f5")
+KEY_SLOT = bytes.fromhex("02 81 1f 00 41 1f 00 53")
+CTRL_C_SLOT = bytes.fromhex("04 80 01 00 81 06 00 40 01 00 41 06 00 c1")
+
+
+def test_parse_events_reads_the_records_the_mouse_holds():
+    assert p.parse_events(PLAY_SLOT) == [(0x82, 0x00CD), (0x42, 0x00CD)]
+    assert p.parse_events(CTRL_C_SLOT + b"\xff" * 6) == [
+        (0x80, 0x01), (0x81, 0x06), (0x40, 0x01), (0x41, 0x06)]
+
+
+def test_parse_events_rejects_erased_or_corrupt_slots():
+    assert p.parse_events(b"\xff" * 20) is None            # erased (factory reset)
+    assert p.parse_events(bytes.fromhex("02 82 cd 00 42 cd 00 f4")) is None
+    assert p.parse_events(CTRL_C_SLOT[:9]) is None          # truncated
+
+
+def test_ext_action_classifies_what_the_ui_can_show():
+    assert p.ext_action(p.parse_events(PLAY_SLOT)) == ("media", 0x00CD)
+    assert p.ext_action(p.parse_events(KEY_SLOT)) == ("key", 0x1F)
+    assert p.ext_action(p.parse_events(CTRL_C_SLOT)) == ("combo", 0x01, 0x06)
+    assert p.ext_action([(0x81, 4)] * 3) is None             # e.g. a macro
+
+
+def test_ext_action_round_trips_through_the_builders():
+    for packets, expected in ((p.build_key(9, 0x04), ("key", 0x04)),
+                              (p.build_combo(9, 0x03, 0x06), ("combo", 0x03, 0x06)),
+                              (p.build_media(9, 0x00E2), ("media", 0x00E2))):
+        record = b"".join(bytes(pk[6:6 + pk[5]]) for pk in packets)
+        assert p.ext_action(p.parse_events(record)) == expected
