@@ -1,10 +1,13 @@
 # open-m711pro
 
+**🇺🇸 English** · [🇧🇷 Português](README.pt-BR.md)
+
 [![tests](https://github.com/mateusands/open-m711pro/actions/workflows/tests.yml/badge.svg)](https://github.com/mateusands/open-m711pro/actions/workflows/tests.yml)
 
 **Configure your Redragon M711 Pro (Cobra Pro) mouse on Linux — no Windows
 needed.** RGB lighting, DPI, polling rate, button remapping and macro-style key
-combinations, from a GUI or the command line.
+combinations, from a GUI or the command line. The interface speaks English and
+Brazilian Portuguese.
 
 Redragon ships configuration software for Windows only. This project talks to
 the mouse directly: the USB protocol was reverse-engineered by capturing the
@@ -47,6 +50,9 @@ protocol were cross-checked against them.
 
 If [libratbag](https://github.com/libratbag/libratbag) / Piper does not list your
 Redragon, this is an alternative for this particular model.
+
+> **Note:** the plain **M711 Cobra** (no "Pro") is a different mouse with a
+> different chip (`04d9:fc30`) — this project does not support it.
 
 ## What works
 
@@ -211,6 +217,9 @@ open-m711pro-gui       # installed
 python3 main.py        # from the source tree
 ```
 
+The interface follows the system language on first run and can be switched in
+the bottom-left corner (**EN / PT-BR**).
+
 Command line (`python3 main.py` works the same way from the source tree):
 
 ```bash
@@ -266,14 +275,16 @@ m711pro/
 │   ├── device.py        hidraw I/O (find_devices, send_*, read_*)
 │   └── state.py         local persistence of the last applied state
 ├── cli/commands.py      command-line interface
+├── system.py            `open-m711pro setup`: udev rule and menu entry
 ├── ui/
 │   ├── qt.py            PySide6 interface
+│   ├── i18n.py          interface text in English and Portuguese
 │   ├── tk.py            tkinter fallback
 │   └── theme.py         palette and visual constants
-└── data/colors.py       colour names and palette
-tools/                   read-only memory dumper, test runner
+└── data/                colour names, HID keys, udev rule, .desktop entry
+tools/                   memory dumper, DPI measurement, test runner
 tests/                   byte-match tests against real captures
-packaging/               udev rule, .desktop entry, install script
+packaging/               install script for a checkout
 ```
 
 Layer rules: `core/protocol.py` is pure logic and is what the byte-match tests
