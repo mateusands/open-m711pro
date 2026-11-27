@@ -14,7 +14,7 @@ from PySide6.QtGui import QPainter, QColor, QConicalGradient, QRadialGradient, Q
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout,
     QLabel, QComboBox, QSlider, QPushButton, QFrame, QStackedWidget, QColorDialog,
-    QSpinBox, QScrollArea, QCheckBox, QAbstractSpinBox,
+    QSpinBox, QScrollArea, QCheckBox, QAbstractSpinBox, QStyle, QStyleOptionButton,
 )
 
 from ..core import device, state, protocol
@@ -180,6 +180,26 @@ class Slider(QSlider):
 
     def wheelEvent(self, e):
         e.ignore()
+
+
+class CheckBox(QCheckBox):
+    """A checkbox whose ticked state shows a check mark, not only a colour."""
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if not self.isChecked():
+            return
+        opt = QStyleOptionButton(); self.initStyleOption(opt)
+        box = self.style().subElementRect(QStyle.SE_CheckBoxIndicator, opt, self)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor("#0b0d11" if self.isEnabled() else "#3a3e47"), 2.2)
+        pen.setCapStyle(Qt.RoundCap); pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        x, y, w, h = box.x(), box.y(), box.width(), box.height()
+        p.drawLine(QPointF(x + w * 0.24, y + h * 0.52), QPointF(x + w * 0.43, y + h * 0.72))
+        p.drawLine(QPointF(x + w * 0.43, y + h * 0.72), QPointF(x + w * 0.78, y + h * 0.30))
+        p.end()
 
 
 # ---------------------------------------------------------------------------
@@ -707,7 +727,7 @@ class DpiPage(QWidget):
 
         root.addSpacing(6)
         root.addWidget(self._muted(tr("DPI STAGE INDICATOR")))
-        self.effect_btn = QCheckBox(tr("Light the LED in the active stage's colour "
+        self.effect_btn = CheckBox(tr("Light the LED in the active stage's colour "
                                        "(DPI Effect)"))
         self.effect_btn.setEnabled(False)
         self.effect_btn.clicked.connect(self._toggle_effect)
