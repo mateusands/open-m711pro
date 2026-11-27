@@ -23,7 +23,7 @@ try:
 except ImportError:                                  # pragma: no cover
     HAVE_QT = False
 
-from m711pro.core import device, protocol
+from m711pro.core import device, protocol, state
 
 _app = None
 
@@ -80,6 +80,12 @@ class _Stub:
         for name in ("send_color", "send_breathing", "send_cycle"):
             setattr(device, name, self._recorder(name))
         device.send_off = self._recorder("send_off")
+        # The pages persist choices (DPI mode, language, last effect). Without
+        # this the suite wrote into the developer's real state.json.
+        self._saved_state = (state.load, state.save)
+        self.state = {}
+        state.load = lambda: dict(self.state)
+        state.save = lambda new: self.state.update(new) or None
 
     def _recorder(self, name):
         def call(*args, **kwargs):
@@ -91,6 +97,7 @@ class _Stub:
     def restore(self):
         for name, original in self._saved.items():
             setattr(device, name, original)
+        state.load, state.save = self._saved_state
 
 
 def _window():
@@ -358,3 +365,36 @@ def test_a_translated_effect_still_sends_the_right_command():
     finally:
         i18n.set_language("en", persist=False)
         stub.restore()
+
+
+
+def test_the_ui_suite_never_touches_the_real_state_file():
+    """The suite once rewrote the developer's ~/.config state.json."""
+    if not HAVE_QT:
+        return
+    stub = _Stub(); stub.install()
+    try:
+        _, window = _window()
+        window._go(1)
+        window.dpi.mode.setCurrentIndex(1)       # persists "dpi_mode"
+        assert stub.state.get("dpi_mode") == "stages"
+    finally:
+        stub.restore()
+
+
+def test_qt_dialogs_follow_the_interface_language():
+    if not HAVE_QT:
+        return
+    from m711pro.ui import i18n, qt
+    from PySide6.QtCore import QCoreApplication
+    app = _qt()
+    try:
+        i18n.set_language("pt", persist=False)
+        qt._install_qt_translator(app)
+        if qt._qt_translator is None:            # no qtbase_pt_BR on this box
+            return
+        assert QCoreApplication.translate("QColorDialog", "&Basic colors") != "&Basic colors"
+    finally:
+        i18n.set_language("en", persist=False)
+        qt._install_qt_translator(app)
+    assert qt._qt_translator is None

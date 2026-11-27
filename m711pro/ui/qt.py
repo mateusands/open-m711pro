@@ -9,7 +9,8 @@ The core (m711pro.core) stays pure stdlib; only this GUI uses Qt.
 import math
 import colorsys
 
-from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QTimer
+from PySide6.QtCore import (Qt, Signal, QRectF, QPointF, QTimer, QTranslator,
+                            QLibraryInfo)
 from PySide6.QtGui import QPainter, QColor, QConicalGradient, QRadialGradient, QBrush, QPen
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout,
@@ -1410,6 +1411,7 @@ class MainWindow(QMainWindow):
             self.lang_btns[code].setChecked(True)
             return
         set_language(code, persist=persist)
+        _install_qt_translator(QApplication.instance())
         self._build(self.stack.currentIndex())
 
     def _go(self, idx):
@@ -1428,8 +1430,31 @@ class MainWindow(QMainWindow):
         self.status.setText(msg)
 
 
+_qt_translator = None
+
+
+def _install_qt_translator(app):
+    """Qt's own dialogs (the colour picker) in the interface language.
+
+    Qt ships its translations; without loading them the picker stayed in
+    English inside a Portuguese interface. A missing file just leaves English.
+    """
+    global _qt_translator
+    if _qt_translator is not None:
+        app.removeTranslator(_qt_translator)
+        _qt_translator = None
+    if language() != "pt":
+        return
+    translator = QTranslator(app)
+    if translator.load("qtbase_pt_BR",
+                       QLibraryInfo.path(QLibraryInfo.TranslationsPath)):
+        app.installTranslator(translator)
+        _qt_translator = translator
+
+
 def main():
     app = QApplication.instance() or QApplication([])
     app.setStyleSheet(QSS)
+    _install_qt_translator(app)
     win = MainWindow(); win.show()
     app.exec()

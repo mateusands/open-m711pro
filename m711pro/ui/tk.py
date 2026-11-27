@@ -188,6 +188,10 @@ class App:
         self.effect.set("Steady")
         self.effect.pack(side="left", padx=10)
         self.effect.bind("<<ComboboxSelected>>", self._on_effect)
+        # Tk scrolls a combobox's value with the wheel, and a changed effect is
+        # a write to the mouse: swallow the wheel so scrolling never sends.
+        for wheel in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.effect.bind(wheel, lambda e: "break")
 
         self.body = tk.Frame(p, bg=T.BG); self.body.pack(anchor="w", fill="x", pady=6)
 
