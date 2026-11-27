@@ -15,7 +15,10 @@ import sys
 import tempfile
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-RULE_NAME = "99-m711pro.rules"
+# Must sort before 73-seat-late.rules, where systemd applies the uaccess ACL:
+# shipped as 99-m711pro.rules the tag arrived too late and did nothing.
+RULE_NAME = "70-m711pro.rules"
+PREVIOUS_RULE = "/etc/udev/rules.d/99-m711pro.rules"   # our own, v0.1.x
 DESKTOP_NAME = "open-m711pro.desktop"
 RULE_DEST = "/etc/udev/rules.d/" + RULE_NAME
 GUI_COMMAND = "open-m711pro-gui"
@@ -126,7 +129,7 @@ def _run(cmd):
 
 
 def setup(run=_run, data_home=None, is_root=None, which=shutil.which, say=print,
-          legacy_path=LEGACY_RULE):
+          legacy_path=LEGACY_RULE, previous_path=PREVIOUS_RULE):
     """Install the udev rule (via sudo) and this user's menu entry."""
     if is_root is None:
         is_root = os.geteuid() == 0
@@ -138,6 +141,10 @@ def setup(run=_run, data_home=None, is_root=None, which=shutil.which, say=print,
     with tempfile.NamedTemporaryFile("w", suffix=".rules", delete=False) as tmp:
         tmp.write(udev_rule())
     commands = udev_install_commands(tmp.name, is_root)
+    if os.path.exists(previous_path):
+        say(f"replacing {previous_path}: numbered after 73-seat-late.rules, it "
+            "never granted access")
+        commands.insert(1, _as_root(["rm", "-f", previous_path], is_root))
     legacy = legacy_rule(legacy_path)
     if legacy == "ours":
         say(f"removing the old world-writable rule {legacy_path} (MODE 0666, "
@@ -162,7 +169,8 @@ def uninstall(run=_run, data_home=None, is_root=None, say=print):
     """Remove exactly what setup installed."""
     if is_root is None:
         is_root = os.geteuid() == 0
-    for cmd in ([_as_root(["rm", "-f", RULE_DEST], is_root)]
+    for cmd in ([_as_root(["rm", "-f", RULE_DEST], is_root),
+                 _as_root(["rm", "-f", PREVIOUS_RULE], is_root)]
                 + udev_install_commands("", is_root)[1:]):
         say("  $ " + " ".join(cmd))
         run(cmd)

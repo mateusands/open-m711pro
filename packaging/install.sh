@@ -3,7 +3,7 @@
 # open-m711pro — system integration installer.
 #
 # Installs two files and nothing else:
-#   /etc/udev/rules.d/99-m711pro.rules      device access for the logged-in user
+#   /etc/udev/rules.d/70-m711pro.rules      device access for the logged-in user
 #   /usr/share/applications/open-m711pro.desktop   application menu entry
 #
 # It does NOT install the Python package; use pip for that (see packaging/README.md).
@@ -14,7 +14,10 @@
 #
 set -eu
 
-UDEV_RULE_NAME="99-m711pro.rules"
+# Must sort before 73-seat-late.rules, where systemd applies uaccess. Earlier
+# versions installed 99-m711pro.rules, which tagged the device too late.
+UDEV_RULE_NAME="70-m711pro.rules"
+PREVIOUS_RULE_NAME="99-m711pro.rules"
 DESKTOP_NAME="open-m711pro.desktop"
 
 # Overridable so the test suite can run this script for real in a sandbox.
@@ -126,6 +129,10 @@ do_install() {
 
     say "udev rule:"
     install_file "$DATA_DIR/$UDEV_RULE_NAME" "$UDEV_RULE_DEST"
+    if [ -f "$UDEV_RULE_DIR/$PREVIOUS_RULE_NAME" ]; then
+        say "  removing   $UDEV_RULE_DIR/$PREVIOUS_RULE_NAME (ran after 73-seat-late, never applied)"
+        rm -f "$UDEV_RULE_DIR/$PREVIOUS_RULE_NAME"
+    fi
     remove_legacy_rule
     reload_udev
 
@@ -161,6 +168,7 @@ do_uninstall() {
 
     say "udev rule:"
     remove_file "$UDEV_RULE_DEST"
+    remove_file "$UDEV_RULE_DIR/$PREVIOUS_RULE_NAME"
     reload_udev
 
     say "desktop entry:"

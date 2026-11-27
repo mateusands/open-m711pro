@@ -142,7 +142,7 @@ recarregam o udev e colocam o app no menu de aplicativos. O `setup` só pede
 `sudo` para copiar a regra para `/etc`. Reconecte o mouse depois. Os dois
 podem ser rodados de novo sem problema, e `--uninstall` desfaz. Sem a regra, o
 app avisa: "este usuário não tem permissão para abri-lo — a regra udev não está
-instalada".
+instalada ou não foi aplicada".
 
 A regra usa `TAG+="uaccess"`, que entrega o nó `hidraw` ao usuário da sessão
 local ativa, em vez do atalho `MODE="0666"`, que deixaria o dispositivo
@@ -252,7 +252,7 @@ open-m711pro button 9 media:mute
 
 | Mensagem | Causa e solução |
 |----------|-----------------|
-| "este usuário não tem permissão para abri-lo — a regra udev não está instalada" | Rode `open-m711pro setup` (ou `sudo sh packaging/install.sh`) e reconecte o dongle. |
+| "este usuário não tem permissão para abri-lo — a regra udev não está instalada ou não foi aplicada" | Rode `open-m711pro setup` (ou `sudo sh packaging/install.sh`) e reconecte o dongle. |
 | "mouse não encontrado" | O dongle está desconectado, o mouse está desligado, ou uma máquina virtual capturou o dispositivo USB. O `lsusb` deve listar `25a7:fa07`. |
 | "não foi possível ler…" / sem resposta | O mouse dormiu ou está fora de alcance. Mexa nele para acordar e tente de novo; nada foi gravado. |
 | O atalho do menu não faz nada | Rode o instalador de novo a partir do clone que você realmente usa: o atalho aponta para o `main.py` daquele clone. |

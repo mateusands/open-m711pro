@@ -6,7 +6,7 @@ menu integration.
 
 | File | Purpose |
 |------|---------|
-| `../m711pro/data/99-m711pro.rules` | udev rule granting the logged-in user access to the mouse's `/dev/hidraw*` node (both PIDs, `25a7:fa07` and `25a7:fa08`). |
+| `../m711pro/data/70-m711pro.rules` | udev rule granting the logged-in user access to the mouse's `/dev/hidraw*` node (both PIDs, `25a7:fa07` and `25a7:fa08`). |
 | `../m711pro/data/open-m711pro.desktop` | freedesktop entry template so the GUI shows up in the application menu. |
 | `install.sh` | installs/removes the two files above, reloads udev, refreshes the desktop database. Idempotent, root-checked. |
 
@@ -84,6 +84,11 @@ user of the currently active local session, and to revoke it when that session
 ends. Identical convenience on a desktop, much smaller blast radius. It is what
 libratbag/piper, OpenRGB and solaar use.
 
+The file must sort **before** `73-seat-late.rules`, where systemd actually
+applies the ACL — hence `70-`. Versions up to 0.1.2 shipped it as
+`99-m711pro.rules`, which tagged the device too late and granted nothing; both
+installers remove that file.
+
 It needs systemd-logind, which every mainstream desktop distribution has. The
 rules file carries a commented-out `GROUP="plugdev", MODE="0660"` fallback for
 systems without it — still narrower than `0666`.
@@ -91,7 +96,7 @@ systems without it — still narrower than `0666`.
 ## Manual install, without the script
 
 ```bash
-sudo install -m 0644 m711pro/data/99-m711pro.rules /etc/udev/rules.d/99-m711pro.rules
+sudo install -m 0644 m711pro/data/70-m711pro.rules /etc/udev/rules.d/70-m711pro.rules
 sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=hidraw
 

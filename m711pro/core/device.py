@@ -62,7 +62,7 @@ def _no_permission(paths):
     nodes = ", ".join(paths)
     return NoPermission(
         f"the mouse was found ({nodes}) but this user cannot open it — the udev "
-        "rule is not installed. Run 'open-m711pro setup' (from a checkout: "
+        "rule is missing or has not applied. Run 'open-m711pro setup' (from a checkout: "
         "'python3 main.py setup' or 'sudo sh packaging/install.sh'), then "
         "replug the dongle.")
 

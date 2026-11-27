@@ -139,7 +139,7 @@ Either installs a udev rule for both product IDs (`25a7:fa07` and `25a7:fa08`),
 reloads udev, and adds the app to the application menu. `setup` asks for `sudo`
 only to copy the rule into `/etc`. Replug the mouse afterwards. Both are
 idempotent, and `--uninstall` reverses them. Without the rule the app tells you
-so: "this user cannot open it — the udev rule is not installed".
+so: "this user cannot open it — the udev rule is missing or has not applied".
 
 The rule uses `TAG+="uaccess"`, which hands the `hidraw` node to the user of the
 active local session, rather than the `MODE="0666"` one-liner that would leave
@@ -248,7 +248,7 @@ open-m711pro button 9 media:mute
 
 | Message | Cause and fix |
 |---------|---------------|
-| "this user cannot open it — the udev rule is not installed" | Run `open-m711pro setup` (or `sudo sh packaging/install.sh`), then replug the dongle. |
+| "this user cannot open it — the udev rule is missing or has not applied" | Run `open-m711pro setup` (or `sudo sh packaging/install.sh`), then replug the dongle. |
 | "mouse not found" | The dongle is unplugged, the mouse is off, or a virtual machine holds the USB device. `lsusb` should list `25a7:fa07`. |
 | "could not read …" / no answer | The mouse fell asleep or is out of range. Move it to wake it and try again; nothing was written. |
 | The menu entry does nothing | Re-run the installer from the checkout you actually use: the entry points at that checkout's `main.py`. |

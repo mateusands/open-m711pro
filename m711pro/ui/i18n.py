@@ -70,7 +70,7 @@ def tr_error(exc):
 ERRORS_PT = [
     ("the mouse was found",
      "o mouse foi encontrado ({nodes}), mas este usuário não tem permissão para "
-     "abri-lo — a regra udev não está instalada. Rode 'open-m711pro setup' (num "
+     "abri-lo — a regra udev não está instalada ou não foi aplicada. Rode 'open-m711pro setup' (num "
      "clone: 'python3 main.py setup' ou 'sudo sh packaging/install.sh') e "
      "reconecte o dongle."),
     ("mouse not found",

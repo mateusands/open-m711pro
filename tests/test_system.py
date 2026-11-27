@@ -39,7 +39,7 @@ def test_install_sh_reads_the_same_files():
     with open(os.path.join(REPO, "packaging", "install.sh")) as handle:
         script = handle.read()
     assert "m711pro/data" in script
-    assert not os.path.exists(os.path.join(REPO, "packaging", "99-m711pro.rules"))
+    assert not os.path.exists(os.path.join(REPO, "packaging", "70-m711pro.rules"))
 
 
 # --- The menu entry runs something that exists ------------------------------
@@ -76,7 +76,7 @@ def test_udev_commands_use_sudo_when_not_root():
     commands = system.udev_install_commands("/tmp/rule", is_root=False)
     assert all(cmd[0] == "sudo" for cmd in commands)
     install = commands[0]
-    assert install[-2:] == ["/tmp/rule", "/etc/udev/rules.d/99-m711pro.rules"]
+    assert install[-2:] == ["/tmp/rule", "/etc/udev/rules.d/70-m711pro.rules"]
 
 
 def test_udev_commands_skip_sudo_as_root():
@@ -96,7 +96,8 @@ def test_setup_runs_the_udev_steps_and_writes_the_entry():
     with tempfile.TemporaryDirectory() as tmp:
         system.setup(run=ran.append, data_home=tmp, is_root=False,
                      which=lambda name: "/bin/" + name, say=lambda *_: None,
-                     legacy_path=os.path.join(tmp, "none.rules"))
+                     legacy_path=os.path.join(tmp, "none.rules"),
+                     previous_path=os.path.join(tmp, "none-either.rules"))
         assert os.path.exists(os.path.join(tmp, "applications",
                                            "open-m711pro.desktop"))
     assert len(ran) == 3 and ran[0][0] == "sudo"
@@ -110,7 +111,8 @@ def test_uninstall_removes_both():
                          say=lambda *_: None)
         assert not os.path.exists(os.path.join(tmp, "applications",
                                                "open-m711pro.desktop"))
-    assert ran[0] == ["sudo", "rm", "-f", "/etc/udev/rules.d/99-m711pro.rules"]
+    assert ["sudo", "rm", "-f", "/etc/udev/rules.d/70-m711pro.rules"] in ran
+    assert ["sudo", "rm", "-f", "/etc/udev/rules.d/99-m711pro.rules"] in ran
 
 
 def test_setup_refuses_to_run_under_sudo():
@@ -163,7 +165,8 @@ def test_setup_removes_our_legacy_rule_before_reloading():
         legacy = _legacy(tmp, system.LEGACY_LINE + "\n")
         system.setup(run=ran.append, data_home=tmp, is_root=False,
                      which=lambda name: "/bin/" + name, say=lambda *_: None,
-                     legacy_path=legacy)
+                     legacy_path=legacy,
+                     previous_path=os.path.join(tmp, "none-either.rules"))
     assert ["sudo", "rm", "-f", legacy] in ran
     assert ran.index(["sudo", "rm", "-f", legacy]) < \
         ran.index(["sudo", "udevadm", "control", "--reload-rules"])
@@ -175,7 +178,8 @@ def test_setup_leaves_an_edited_legacy_rule_alone_and_says_so():
         legacy = _legacy(tmp, "# my own tweaks\n" + system.LEGACY_LINE + "\n")
         system.setup(run=ran.append, data_home=tmp, is_root=False,
                      which=lambda name: "/bin/" + name, say=said.append,
-                     legacy_path=legacy)
+                     legacy_path=legacy,
+                     previous_path=os.path.join(tmp, "none-either.rules"))
     assert not any(cmd[-1] == legacy for cmd in ran)
     assert any(legacy in line and "0666" in line for line in said)
 
@@ -217,7 +221,7 @@ def test_install_sh_installs_both_files_and_a_valid_entry():
     with tempfile.TemporaryDirectory() as tmp:
         result, rules, apps = _run_install(tmp, legacy=system.LEGACY_LINE + "\n")
         assert result.returncode == 0, result.stdout + result.stderr
-        assert os.path.exists(os.path.join(rules, "99-m711pro.rules"))
+        assert os.path.exists(os.path.join(rules, "70-m711pro.rules"))
         assert not os.path.exists(os.path.join(rules, "99-redragon-m711.rules"))
         with open(os.path.join(apps, "open-m711pro.desktop")) as handle:
             entry = handle.read()
@@ -241,3 +245,35 @@ def test_the_shipped_entry_has_one_main_category():
     line = next(l for l in entry.splitlines() if l.startswith("Categories="))
     cats = [c for c in line.split("=", 1)[1].split(";") if c]
     assert len([c for c in cats if c in main]) == 1, cats
+
+
+# --- uaccess only works before 73-seat-late.rules -----------------------------
+# systemd applies the uaccess ACL in 73-seat-late.rules, for devices ALREADY
+# tagged by then. Shipped as 99-m711pro.rules the tag arrived too late: udevadm
+# showed TAGS=:uaccess: on the owner's mouse but the node stayed root-only.
+# Nobody noticed while the README's old MODE 0666 rule was granting access.
+def test_the_rule_runs_before_seat_late():
+    number = int(system.RULE_NAME.split("-", 1)[0])
+    assert number < 73, system.RULE_NAME
+    assert os.path.exists(os.path.join(REPO, "m711pro", "data", system.RULE_NAME))
+
+
+def test_setup_removes_our_previous_late_rule():
+    ran = []
+    with tempfile.TemporaryDirectory() as tmp:
+        old = os.path.join(tmp, "99-m711pro.rules")
+        open(old, "w").close()
+        system.setup(run=ran.append, data_home=tmp, is_root=False,
+                     which=lambda name: "/bin/" + name, say=lambda *_: None,
+                     legacy_path=os.path.join(tmp, "none.rules"),
+                     previous_path=old)
+    assert ["sudo", "rm", "-f", old] in ran
+
+
+def test_install_sh_replaces_our_previous_late_rule():
+    with tempfile.TemporaryDirectory() as tmp:
+        os.makedirs(os.path.join(tmp, "rules"))
+        open(os.path.join(tmp, "rules", "99-m711pro.rules"), "w").close()
+        result, rules, _ = _run_install(tmp)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert sorted(os.listdir(rules)) == ["70-m711pro.rules"]
