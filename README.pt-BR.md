@@ -19,7 +19,7 @@ núcleo **não tem nenhuma dependência**; a interface gráfica usa Qt (PySide6)
 é opcional.
 
 <p align="center">
-  <img src="assets/dpi.png" alt="Página de DPI do open-m711pro" width="720">
+  <img src="assets/pt-BR/dpi.png" alt="Página de DPI do open-m711pro" width="720">
 </p>
 
 > Sem vínculo com a Redragon e sem endosso dela. Use por sua conta e risco.
@@ -77,8 +77,9 @@ Redragon, este projeto é uma alternativa para este modelo.
 - **Botões** — remapeia os oito: botões de mouse, DPI +/−/alternar, tecla de
   disparo, três cliques, liga/desliga RGB, alternar polling, desativar
 - **Teclas multimídia** — tocar/pausar, próxima, anterior, mudo, parar, volume
-- **Teclas do teclado e combinações** — `key:a`, `combo:ctrl+c`, as duas
-  conferidas byte a byte com o que o app oficial grava
+- **Teclas do teclado e combinações** (ex.: Ctrl+C), pela interface ou pela
+  CLI (`key:a`, `combo:ctrl+c`) — conferidas byte a byte com o que o app
+  oficial grava
 - **Leitura do estado real** do mouse, não só do que este app gravou
 
 Ainda não mapeado: **macros** e o efeito de iluminação **Neon** do app oficial.
@@ -281,8 +282,8 @@ apague o arquivo.
 ## A interface
 
 <p align="center">
-  <img src="assets/lighting.png" alt="Página de iluminação: roda de cores HSV, efeitos, brilho e velocidade" width="440">
-  <img src="assets/buttons.png" alt="Página de botões: clique num número do mouse para ir à linha dele" width="440">
+  <img src="assets/pt-BR/lighting.png" alt="Página de iluminação: roda de cores HSV, efeitos, brilho e velocidade" width="440">
+  <img src="assets/pt-BR/buttons.png" alt="Página de botões: clique num número do mouse para ir à linha dele" width="440">
 </p>
 
 Clique num número no desenho do mouse para ir à linha daquele botão. Os números

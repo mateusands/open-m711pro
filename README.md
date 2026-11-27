@@ -63,8 +63,9 @@ Redragon, this is an alternative for this particular model.
 - **Buttons** — remap all eight: mouse buttons, DPI up/down/cycle, fire key,
   three-click, RGB toggle, polling switch, disable
 - **Multimedia keys** — play/pause, next, previous, mute, stop, volume
-- **Keyboard keys and combinations** — `key:a`, `combo:ctrl+c`, both verified
-  byte for byte against what the official app writes
+- **Keyboard keys and combinations** (e.g. Ctrl+C), from the interface or the
+  CLI (`key:a`, `combo:ctrl+c`) — verified byte for byte against what the
+  official app writes
 - **Reading the real state** back from the mouse, not just what this app wrote
 
 Not mapped yet: **macros**, and the official app's **Neon** lighting effect. A
