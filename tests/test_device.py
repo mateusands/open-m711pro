@@ -489,3 +489,66 @@ def test_colour_effect_names_are_the_ones_read_back():
     reported = set(device.EFFECT_NAMES.values())
     assert set(device.COLOR_EFFECTS) <= reported
     assert device.sender_for("Off") is None          # Off has its own path
+
+
+# --- Permission denied: the most common first-run failure -------------------
+# Without the udev rule the hidraw node exists but is root-only. find_devices
+# still lists it (it only reads sysfs), and opening it raises PermissionError.
+# That used to be swallowed as a generic OSError, so a missing rule read as
+# "no interface accepted the command" or "did the mouse answer?" — a message
+# that sends people looking at the dongle instead of at the fix.
+def _denied(*args, **kwargs):
+    raise PermissionError(13, "Permission denied", "/dev/hidraw9")
+
+
+@contextlib.contextmanager
+def denied_node():
+    originals = {name: getattr(device, name) for name in
+                 ("find_devices", "_send_feature", "_read_from", "_last_reader")}
+    device.find_devices = lambda: [("/dev/hidraw9", 0xFA07)]
+    device._send_feature = _denied
+    device._read_from = _denied
+    try:
+        yield
+    finally:
+        for name, original in originals.items():
+            setattr(device, name, original)
+
+
+def test_send_packets_reports_a_permission_problem_as_such():
+    with denied_node():
+        try:
+            device.send_packets([protocol.build_off()])
+        except device.NoPermission as exc:
+            message = str(exc)
+        else:
+            raise AssertionError("a denied node must raise NoPermission")
+    assert "/dev/hidraw9" in message
+    assert "install.sh" in message
+
+
+def test_read_register_reports_a_permission_problem_as_such():
+    with denied_node():
+        try:
+            device.read_register(protocol.LED_ADDR, 8)
+        except device.NoPermission:
+            pass
+        else:
+            raise AssertionError("a denied node must raise NoPermission")
+
+
+def test_no_permission_is_still_a_device_not_found():
+    # every interface already catches DeviceNotFound and shows its message
+    assert issubclass(device.NoPermission, device.DeviceNotFound)
+
+
+def test_the_not_found_message_does_not_recommend_mode_0666():
+    # the shipped rule uses TAG+="uaccess"; 0666 is what it argues against
+    original = device.find_devices
+    device.find_devices = lambda: []
+    try:
+        device.send_packets([protocol.build_off()])
+    except device.DeviceNotFound as exc:
+        assert "0666" not in str(exc)
+    finally:
+        device.find_devices = original
