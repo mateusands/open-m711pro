@@ -53,17 +53,17 @@ Redragon, this is an alternative for this particular model.
 - **LED** — solid colour, brightness, breathing, cycle, off, effect speed
 - **DPI** — all five stages, independent X/Y in the wire format, single-DPI mode
 - **DPI Effect** — the LED that indicates the current DPI stage
-- **Buttons** — remap all 16 slots: mouse buttons, DPI up/down/cycle, fire key,
+- **USB polling rate** — 1000 / 500 / 250 / 125 Hz
+- **Buttons** — remap all eight: mouse buttons, DPI up/down/cycle, fire key,
   three-click, RGB toggle, polling switch, disable
 - **Multimedia keys** — play/pause, next, previous, mute, stop, volume
-- **Keyboard keys and combinations** — `key:a`, `combo:ctrl+c`
+- **Keyboard keys and combinations** — `key:a`, `combo:ctrl+c`, both verified
+  byte for byte against what the official app writes
 - **Reading the real state** back from the mouse, not just what this app wrote
 
-- **USB polling rate** — 1000 / 500 / 250 / 125 Hz
-
-Not mapped yet: macros and modifier combos. Keyboard keys are implemented but
-**experimental** (see below), and a second LED zone at `0x0054` is decoded by
-analogy with the M913 but not confirmed here.
+Not mapped yet: **macros**, and the official app's **Neon** lighting effect. A
+second LED block at `0x0054` accepts writes but lights nothing on this model
+(see below).
 
 ## Requirements
 
@@ -85,6 +85,22 @@ is pure logic and already portable; only the I/O module is tied to Linux.
 
 If you want to take that on, the seam is deliberate and small: `find_devices`,
 `_send_feature` and `_read_from` are the only functions that touch the kernel.
+
+On Windows or macOS, [HIDra](https://github.com/luizjr/HIDra) (GPL-3.0) builds on
+this project's protocol work and targets all three systems. We have not tested
+it ourselves.
+
+## Quick start
+
+```bash
+git clone https://github.com/mateusands/open-m711pro && cd open-m711pro
+sudo sh packaging/install.sh   # lets your user reach the mouse; adds a menu entry
+python3 main.py                # opens the interface
+```
+
+No build step: it is plain Python. The release downloads are the same code as a
+pip package — if you took one, `pip install --user` it and run
+`open-m711pro setup` instead of the second line.
 
 ## Install
 
@@ -211,6 +227,15 @@ open-m711pro button 9 media:mute
 > writes, and values are shown the way the app shows them — `700 DPI (≈667 real)`
 > — so the number you typed stays on screen and the real one is still visible.
 > 1000, 2000, 4000 and 8000 are exact.
+
+## Troubleshooting
+
+| Message | Cause and fix |
+|---------|---------------|
+| "this user cannot open it — the udev rule is not installed" | Run `open-m711pro setup` (or `sudo sh packaging/install.sh`), then replug the dongle. |
+| "mouse not found" | The dongle is unplugged, the mouse is off, or a virtual machine holds the USB device. `lsusb` should list `25a7:fa07`. |
+| "could not read …" / no answer | The mouse fell asleep or is out of range. Move it to wake it and try again; nothing was written. |
+| The menu entry does nothing | Re-run the installer from the checkout you actually use: the entry points at that checkout's `main.py`. |
 
 ## The interface
 
